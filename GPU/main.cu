@@ -153,7 +153,13 @@ void resize_cuda(
 
     cudaMalloc(&d_input, in_size);
     cudaMalloc(&d_output, out_size);
-
+    
+    //controllo allocazione IO
+    if (cudaMalloc(&d_input, in_size) != cudaSuccess)
+      printf("Errore nell'allocazione della memoria input: %s\n", cudaGetErrorString(cudaMalloc(&d_input, in_size)));
+    if (cudaMalloc(&d_output, out_size) != cudaSuccess)
+      printf("Errore nell'allocazione della memoria output: %s\n", cudaGetErrorString(cudaMalloc(&d_output, out_size)));
+    
     cudaMemcpy(d_input, h_input, in_size, cudaMemcpyHostToDevice);
 
     dim3 block(16, 16);
@@ -189,9 +195,9 @@ int main() {
     //---
     
     //filename and format
-    const char *imgName = "mario.jpg";
+    const char *imgName = "rob.png";
     //upscaling factor
-    int mul = 2;
+    int mul = 16;
     //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
     int interpolation = 2;
 
@@ -226,6 +232,6 @@ int main() {
     stbi_image_free(image);
     free(resized);
 
-    printf("Upscaling CUDA completato\n");
+    printf("Upscaling CUDA di %s completato\n", imgName);
     return 0;
 }
