@@ -1,0 +1,20 @@
+Caratteristiche principali:
+
+Un thread CUDA per pixel di output
+
+Mappatura diretta:
+(blockIdx, threadIdx) → (x, y) del pixel upscalato
+
+Nessun uso di shared memory
+
+Accessi diretti alla memoria globale
+
+Kernel separati per:
+Nearest Neighbor
+Bilinear
+Bicubic
+
+Ogni thread:
+calcola la posizione sorgente (src_x, src_y)
+legge i pixel necessari dalla memoria globale
+scrive il pixel risultante in output
