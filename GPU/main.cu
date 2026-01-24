@@ -176,23 +176,40 @@ void resize_cuda(
 
 int main() {
     int width, height, channels;
+    
+    //filename and format
+    const char *imgName = "mario.png";
+    //upscaling factor
+    int mul = 2;
+    //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
+    int interpolation = 2;
 
-    unsigned char *image = stbi_load("mario.png", &width, &height, &channels, 3);
+    const char *mode;
+    if (interpolation == 0)
+        mode = "NN";
+    else if (interpolation == 1)
+        mode = "BL";
+    else
+        mode = "BC";
+
+    char outputName[256];
+    snprintf(outputName, sizeof(outputName), "upscaled_x%d_%s_%s", mul, mode, imgName);
+
+    unsigned char *image = stbi_load(imgName, &width, &height, &channels, 3);
     if (!image) {
         printf("Errore caricamento immagine\n");
         return 1;
     }
 
     channels = 3;
-    int new_width = width * 2;
-    int new_height = height * 2;
+    int new_width = width * mul;
+    int new_height = height * mul;
 
     unsigned char *resized = (unsigned char*) malloc(new_width * new_height * channels);
 
-    //Cambiare Interpolazione: 0 = NN, 1 = bilineare, 2 = bicubica
-    resize_cuda(image, resized, width, height, new_width, new_height, channels, 0);
+    resize_cuda(image, resized, width, height, new_width, new_height, channels, interpolation);
 
-    stbi_write_png("output_cuda.png", new_width, new_height, channels, resized, new_width * channels);
+    stbi_write_png(outputName, new_width, new_height, channels, resized, new_width * channels);
 
     stbi_image_free(image);
     free(resized);
