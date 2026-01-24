@@ -137,6 +137,7 @@ __global__ void bicubic_kernel(
     }
 }
 
+//esegue lato GPU
 void resize_cuda(
     unsigned char *h_input,
     unsigned char *h_output,
@@ -158,7 +159,7 @@ void resize_cuda(
     dim3 block(16, 16);
     dim3 grid((new_width + block.x - 1) / block.x,
               (new_height + block.y - 1) / block.y);
-
+    //Configurazione di esecuzione: nGrid blocco, nBlock thread. Avvia nBlock istanze parallele del kernel sulla GPU
     if (mode == 0)
         nn_kernel<<<grid, block>>>(d_input, d_output, width, height, new_width, new_height, channels);
     else if (mode == 1)
@@ -174,11 +175,21 @@ void resize_cuda(
     cudaFree(d_output);
 }
 
+//esegue su CPU
 int main() {
     int width, height, channels;
+
+    //---chk--->Proprietà del dispositivo
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0); 
+    printf("Nome Dispositivo: %s\n", prop.name);
+    printf("Memoria Gloable Totale: %.0f MB\n", prop.totalGlobalMem / 1024.0 / 1024.0);
+    printf("Clock Core: %d MHz\n", prop.clockRate / 1000);
+    printf("Compute Capability: %d.%d\n", prop.major, prop.minor);
+    //---
     
     //filename and format
-    const char *imgName = "mario.png";
+    const char *imgName = "mario.jpg";
     //upscaling factor
     int mul = 2;
     //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
@@ -206,7 +217,8 @@ int main() {
     int new_height = height * mul;
 
     unsigned char *resized = (unsigned char*) malloc(new_width * new_height * channels);
-
+    
+    //chiama device
     resize_cuda(image, resized, width, height, new_width, new_height, channels, interpolation);
 
     stbi_write_png(outputName, new_width, new_height, channels, resized, new_width * channels);
