@@ -28,3 +28,13 @@ dram__bytes_read ↓
 l1tex__data_hit_rate ↑
 
 Speedup netto, soprattutto per bilinear/bicubic
+
+L'efficacia della Shared Memory dipende dal rapporto di riutilizzo dei dati (Data Reuse):
+
+    Nearest Neighbor (Basso impatto): Ogni pixel di output ha bisogno di 1 solo pixel di input. Anche se molti thread leggono lo stesso pixel (es. in un upscaling 4x), la cache L1/L2 della GPU è già molto brava a gestire questa ridondanza. L'uso della Shared Memory qui spesso non dà grandi vantaggi prestazionali e serve più che altro a scopo didattico.
+In questo caso, l'halo è minimo (0 o 1 pixel a seconda dell'arrotondamento), ma carichiamo comunque una tile per coerenza.
+
+    Bilineare (Medio impatto): Ogni pixel di output richiede un intorno 2x2 (4 pixel). Qui il riutilizzo aumenta: i thread adiacenti condividono 2 dei 4 pixel necessari. La Shared Memory riduce le transazioni verso la memoria globale.
+L'interpolazione bilineare richiede l'accesso a (x0, y0) e (x0+1, y0+1). L'halo necessario è quindi di +1 pixel a destra e in basso.
+
+    Bicubica (Alto impatto): Come abbiamo visto, richiede un intorno 4x4 (16 pixel). Il riutilizzo è massiccio. Senza Shared Memory, la banda di memoria diventa il collo di bottiglia istantaneo.
