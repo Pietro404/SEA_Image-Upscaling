@@ -1,0 +1,6 @@
+Gestione della Memoria in CUDA
+Shared Memory
+• Condivisa tra i thread all'interno di un singolo blocco
+• Più veloce, ma limitata in dimensioni
+• Esiste solo per la durata del blocco di thread
+• Utilizzata per dati temporanei e intermedi
