@@ -53,7 +53,9 @@ __global__ void nn_kernel(
 
     if (src_x >= width)  src_x = width - 1;
     if (src_y >= height) src_y = height - 1;
-
+	
+	//Calcola l'indice di base: baseIndex = (i * width + j) * 3
+	//Accesso ai canali: R=baseI, G=baseI+1, B=baseI+2
     for (int c = 0; c < channels; c++) {
         output[(y * new_width + x) * channels + c] =
             input[(src_y * width + src_x) * channels + c];
@@ -245,7 +247,7 @@ int main() {
     }
     printf("Image loaded: %dx%d with %d channels\n", width, height, channels);
 
-
+	//RGB
     channels = 3;
     int new_width = width * mul;
     int new_height = height * mul;
