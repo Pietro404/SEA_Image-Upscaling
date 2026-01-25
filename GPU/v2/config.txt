@@ -1,6 +1,30 @@
-Gestione della Memoria in CUDA
+[SLIDE 2.2] Gestione della Memoria in CUDA
 Shared Memory
 • Condivisa tra i thread all'interno di un singolo blocco
 • Più veloce, ma limitata in dimensioni
 • Esiste solo per la durata del blocco di thread
 • Utilizzata per dati temporanei e intermedi
+
+I thread in un blocco possono condividere dati tramite memoria on-chip veloce (es. shared memory),
+riducendo gli accessi alla memoria globale più lenta, migliorando dunque significativamente le prestazioni.
+
+Sfruttare la Shared Memory
+• La shared memory è una memoria on-chip a bassa latenza accessibile a tutti i thread di un blocco.
+• Utilizzare la shared memory per i dati frequentemente acceduti e condivisi tra i thread di un blocco per
+ridurre l'accesso alla memoria globale più lenta.
+
+--------
+
+Caricamento di una tile dell’immagine input in shared memory
+Ogni blocco carica:
+(blockDim + halo) per bilinear/bicubic
+
+Benefici:
+Riduzione drastica degli accessi globali
+Riutilizzo dei pixel tra thread dello stesso blocco
+
+Metriche da confrontare:
+dram__bytes_read ↓
+l1tex__data_hit_rate ↑
+
+Speedup netto, soprattutto per bilinear/bicubic
