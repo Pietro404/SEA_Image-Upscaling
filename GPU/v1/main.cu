@@ -1,5 +1,8 @@
+// Include STB image libraries
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+//rimuove warinings
+#pragma nv_diag_suppress 550
 
 #include "stb_image.h"
 #include "stb_image_write.h"
@@ -7,6 +10,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
+#include <time.h>
+
+//Fornisce file, riga, codice e descrizione dell'errore
+#define CHECK(call) \
+{ \
+    const cudaError_t error = call; \
+    if (error != cudaSuccess) \
+    { \
+        printf("Error: %s:%d, ", __FILE__, __LINE__); \
+        printf("code: %d, reason: %s\n", error, cudaGetErrorString(error)); \
+        exit(1); \
+    } \
+}
+//Funzione timer CPU: misura il tempo wall-clock visto dalla CPU
+//Imprecisa, genera overhead, deprecata
+//TODO
+double cpuSecond() {
+      struct timespec ts;
+      timespec_get(&ts, TIME_UTC);
+      return ((double)ts.tv_sec + (double)ts.tv_nsec * 1.e-9);
+    }
 
 //NN
 __global__ void nn_kernel(
@@ -146,22 +170,17 @@ void resize_cuda(
     int channels,
     int mode // 0=NN, 1=Bilineare, 2=Bicubica
 ) {
+    // Allocate device memory
     unsigned char *d_input, *d_output;
-
     int in_size  = width * height * channels;
     int out_size = new_width * new_height * channels;
-
-    cudaMalloc(&d_input, in_size);
-    cudaMalloc(&d_output, out_size);
     
     //controllo allocazione IO
-    if (cudaMalloc(&d_input, in_size) != cudaSuccess)
-      printf("Errore nell'allocazione della memoria input: %s\n", cudaGetErrorString(cudaMalloc(&d_input, in_size)));
-    if (cudaMalloc(&d_output, out_size) != cudaSuccess)
-      printf("Errore nell'allocazione della memoria output: %s\n", cudaGetErrorString(cudaMalloc(&d_output, out_size)));
+    CHECK(cudaMalloc(&d_input, in_size));
+    CHECK(cudaMalloc(&d_output, out_size));
+    CHECK(cudaMemcpy(d_input, h_input, in_size, cudaMemcpyHostToDevice));
     
-    cudaMemcpy(d_input, h_input, in_size, cudaMemcpyHostToDevice);
-
+    // Set up grid and block dimensions
     dim3 block(16, 16);
     dim3 grid((new_width + block.x - 1) / block.x,
               (new_height + block.y - 1) / block.y);
@@ -173,31 +192,31 @@ void resize_cuda(
     else
         bicubic_kernel<<<grid, block>>>(d_input, d_output, width, height, new_width, new_height, channels);
 
-    cudaDeviceSynchronize();
-    printf("CUDA error: %s\n", cudaGetErrorString(cudaGetLastError()));
-    cudaMemcpy(h_output, d_output, out_size, cudaMemcpyDeviceToHost);
+    CHECK(cudaDeviceSynchronize());
+    CHECK(cudaMemcpy(h_output, d_output, out_size, cudaMemcpyDeviceToHost));
 
-    cudaFree(d_input);
-    cudaFree(d_output);
+    CHECK(cudaFree(d_input));
+    CHECK(cudaFree(d_output));
+    printf("CUDA error: %s\n", cudaGetErrorString(cudaGetLastError()));
 }
 
 //esegue su CPU
 int main() {
     int width, height, channels;
 
-    //---chk--->Proprietà del dispositivo
+    //---chk--->Prop. del dispositivo
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0); 
     printf("Nome Dispositivo: %s\n", prop.name);
     printf("Memoria Gloable Totale: %.0f MB\n", prop.totalGlobalMem / 1024.0 / 1024.0);
     printf("Clock Core: %d MHz\n", prop.clockRate / 1000);
-    printf("Compute Capability: %d.%d\n", prop.major, prop.minor);
+    printf("Compute Capability: %d.%d\n\n", prop.major, prop.minor);
     //---
     
     //filename and format
     const char *imgName = "rob.png";
     //upscaling factor
-    int mul = 16;
+    int mul = 10;
     //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
     int interpolation = 2;
 
@@ -209,14 +228,14 @@ int main() {
     else
         mode = "BC";
 
-    char outputName[256];
-    snprintf(outputName, sizeof(outputName), "upscaled_x%d_%s_%s", mul, mode, imgName);
-
+    //load image
     unsigned char *image = stbi_load(imgName, &width, &height, &channels, 3);
     if (!image) {
-        printf("Errore caricamento immagine\n");
+        printf("Error loading image %s\n", imgName);
         return 1;
     }
+    printf("Image loaded: %dx%d with %d channels\n", width, height, channels);
+
 
     channels = 3;
     int new_width = width * mul;
@@ -224,14 +243,19 @@ int main() {
 
     unsigned char *resized = (unsigned char*) malloc(new_width * new_height * channels);
     
-    //chiama device
+    //calls device
     resize_cuda(image, resized, width, height, new_width, new_height, channels, interpolation);
-
+    
+    // Save the output image
+    char outputName[256];
+    snprintf(outputName, sizeof(outputName), "upscaled_x%d_%s_%s", mul, mode, imgName);
     stbi_write_png(outputName, new_width, new_height, channels, resized, new_width * channels);
-
+    printf("\nUpscaling CUDA di %s completato\n", imgName);
+    
+    // Clean up
     stbi_image_free(image);
     free(resized);
+    CHECK(cudaDeviceReset());
 
-    printf("Upscaling CUDA di %s completato\n", imgName);
     return 0;
 }
