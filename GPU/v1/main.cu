@@ -1,7 +1,7 @@
 // Include STB image libraries
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-//rimuove warinings
+//rimuove warnings
 #pragma nv_diag_suppress 550
 
 #include "stb_image.h"
@@ -25,7 +25,7 @@
 }
 //Funzione timer CPU: misura il tempo wall-clock visto dalla CPU
 //Imprecisa, genera overhead, deprecata
-//TODO
+//verificare!! (timeout google colab..)
 double cpuSecond() {
       struct timespec ts;
       timespec_get(&ts, TIME_UTC);
@@ -184,6 +184,10 @@ void resize_cuda(
     dim3 block(16, 16);
     dim3 grid((new_width + block.x - 1) / block.x,
               (new_height + block.y - 1) / block.y);
+			  
+	// Registra il tempo di inizio
+	double iStart = cpuSecond();	
+	
     //Configurazione di esecuzione: nGrid blocco, nBlock thread. Avvia nBlock istanze parallele del kernel sulla GPU
     if (mode == 0)
         nn_kernel<<<grid, block>>>(d_input, d_output, width, height, new_width, new_height, channels);
@@ -193,7 +197,12 @@ void resize_cuda(
         bicubic_kernel<<<grid, block>>>(d_input, d_output, width, height, new_width, new_height, channels);
 
     CHECK(cudaDeviceSynchronize());
-    CHECK(cudaMemcpy(h_output, d_output, out_size, cudaMemcpyDeviceToHost));
+	
+	// Calcola il tempo trascorso
+	double iElaps = cpuSecond() - iStart; 
+    printf("kernel <<<%d, %d>>> Time elapsed %f sec\n", grid, block, iElaps);
+	
+	CHECK(cudaMemcpy(h_output, d_output, out_size, cudaMemcpyDeviceToHost));
 
     CHECK(cudaFree(d_input));
     CHECK(cudaFree(d_output));
@@ -241,9 +250,9 @@ int main() {
     int new_width = width * mul;
     int new_height = height * mul;
 
-    unsigned char *resized = (unsigned char*) malloc(new_width * new_height * channels);
+    unsigned char *resized = (unsigned char*) malloc(new_width * new_height * channels); 
     
-    //calls device
+	//calls device
     resize_cuda(image, resized, width, height, new_width, new_height, channels, interpolation);
     
     // Save the output image
