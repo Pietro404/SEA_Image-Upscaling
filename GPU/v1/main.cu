@@ -44,13 +44,17 @@ __global__ void nn_kernel(
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (x >= new_width || y >= new_height) return;
-
+	//eseguire test solo int eliminando da qui
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
-
+	
     int src_x = (int)(x * x_ratio);
     int src_y = (int)(y * y_ratio);
-
+	//a qui
+	/*e mantenere solo questo
+	int src_x = (x * width) / new_width;
+    int src_y = (y * height) / new_height;
+	*/
     if (src_x >= width)  src_x = width - 1;
     if (src_y >= height) src_y = height - 1;
 	
@@ -270,3 +274,4 @@ int main() {
 
     return 0;
 }
+
