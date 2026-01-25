@@ -25,7 +25,6 @@
 }
 //Funzione timer CPU: misura il tempo wall-clock visto dalla CPU
 //Imprecisa, genera overhead, deprecata
-//verificare!! (timeout google colab..)
 double cpuSecond() {
       struct timespec ts;
       timespec_get(&ts, TIME_UTC);
@@ -206,7 +205,8 @@ void resize_cuda(
 	
 	// Calcola il tempo trascorso
 	double iElaps = cpuSecond() - iStart; 
-    printf("kernel <<<%d, %d>>> Time elapsed %f sec\n", grid, block, iElaps);
+    //risolve warning dim3 type 
+  	printf("kernel <<<(%d,%d), (%d,%d)>>> Time elapsed %f sec\n", grid.x, grid.y, block.x, block.y, iElaps);	
 	
 	CHECK(cudaMemcpy(h_output, d_output, out_size, cudaMemcpyDeviceToHost));
 
@@ -274,4 +274,5 @@ int main() {
 
     return 0;
 }
+
 
