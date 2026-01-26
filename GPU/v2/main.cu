@@ -308,7 +308,7 @@ void resize_cuda(
     CHECK(cudaMemcpy(d_input, h_input, in_size, cudaMemcpyHostToDevice));
     
     // Set up grid and block dimensions
-    dim3 block(16, 16);
+    dim3 block(TILE_W, TILE_H);
     dim3 grid((new_width + block.x - 1) / block.x,
               (new_height + block.y - 1) / block.y);
 			  
@@ -395,5 +395,6 @@ int main() {
 
     return 0;
 }
+
 
 
