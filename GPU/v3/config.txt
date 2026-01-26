@@ -1,1 +1,9 @@
-constant memory
+Modifiche apportate per introdurre la Constant Memory:
+
+    Struct KernelParams: Ho raggruppato tutte le variabili scalari (dimensioni, rapporti di scala, canali) in una struttura.
+
+    __constant__: Ho dichiarato questa struttura con il qualificatore __constant__ a livello globale. Questo dice alla GPU di mettere questi dati nella cache speciale per le costanti (64KB), ottimizzata per quando tutti i thread leggono lo stesso valore contemporaneamente (broadcast).
+
+    cudaMemcpyToSymbol: Nel codice host (resize_cuda), uso questa funzione specifica per copiare i dati dalla CPU alla Constant Memory della GPU.
+
+    Pulizia Argomenti Kernel: Le firme delle funzioni __global__ sono ora molto più pulite, prendono solo i puntatori agli array, risparmiando registri per i thread.
