@@ -350,9 +350,9 @@ int main() {
     //---
     
     //filename and format
-    const char *imgName = "rob.png";
+    const char *imgName = "mario_hd.png";
     //upscaling factor
-    int mul = 10;
+    int mul = 4;
     //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
     int interpolation = 2;
 
@@ -395,4 +395,5 @@ int main() {
 
     return 0;
 }
+
 
