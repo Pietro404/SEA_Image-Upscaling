@@ -384,7 +384,7 @@ int main() {
     
     // Save the output image
     char outputName[256];
-    snprintf(outputName, sizeof(outputName), "upscaled_x%d_%s_%s", mul, mode, imgName);
+    snprintf(outputName, sizeof(outputName), "sm_upscaled_x%d_%s_%s", mul, mode, imgName);
     stbi_write_png(outputName, new_width, new_height, channels, resized, new_width * channels);
     printf("\nUpscaling CUDA di %s completato\n", imgName);
     
@@ -395,3 +395,4 @@ int main() {
 
     return 0;
 }
+
