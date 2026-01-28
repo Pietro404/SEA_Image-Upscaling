@@ -31,13 +31,15 @@ double cpuSecond() {
       return ((double)ts.tv_sec + (double)ts.tv_nsec * 1.e-9);
     }
 
-// Dimensione del blocco di thread (Output)
+// Dimensione blocco di thread (Output): 16x16=256t
 #define TILE_W 16
 #define TILE_H 16
-// Dimensione della cache in Shared Memory (Input)
+
+// Dimensione cache in Shared Memory (Input)
 // Deve essere sufficiente a contenere i pixel di input necessari per un blocco 16x16
-// In caso di Upscaling, l'input è più piccolo dell'output, ma aggiungiamo margine per l'Halo.
-// 32x32 è una dimensione sicura per coprire l'input + halo quando scale >= 1.
+// In caso di Upscaling, l'input è più piccolo dell'output, ma serve aggiungere margine per l'Halo
+// base: 32x32 dimensione sicura per coprire l'input + halo quando scale >= 1
+// per downscaling maggiore: test aumentare dimensione 
 #define SHARED_DIM 32    
 
 //NN
@@ -55,6 +57,7 @@ __global__ void nn_kernel_shared(
     int base_src_x = (int)(blockIdx.x * blockDim.x * x_ratio);
     int base_src_y = (int)(blockIdx.y * blockDim.y * y_ratio);
 
+	//Riduzione della Latenza: s_input risiede nella cache on-chip (L1/Shared), molto più veloce della DRAM globale
     __shared__ unsigned char s_input[SHARED_DIM][SHARED_DIM][3];
 
     // Caricamento cooperativo
@@ -105,7 +108,8 @@ __global__ void bilinear_kernel_shared(
     // L'angolo in alto a sinistra della zona di input necessaria al blocco
     int base_src_x = (int)((blockIdx.x * blockDim.x) * x_ratio);
     int base_src_y = (int)((blockIdx.y * blockDim.y) * y_ratio);
-
+	
+	//Riduzione della Latenza: s_input risiede nella cache on-chip (L1/Shared), molto più veloce della DRAM globale
     __shared__ unsigned char s_input[SHARED_DIM][SHARED_DIM][3];
 
     // Caricamento cooperativo (identico alla bicubica, copre l'area SHARED_DIM x SHARED_DIM)
@@ -179,27 +183,27 @@ __global__ void bicubic_kernel_shared(
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
 
-    // --- 1. IDENTIFICAZIONE DELL'AREA DI INPUT (ROI) ---
-    // Calcoliamo quale porzione dell'immagine di input serve a QUESTO blocco di thread.
-    // Troviamo il pixel input corrispondente all'angolo in alto a sinistra del blocco output
+    // #1 - IDENTIFICAZIONE AREA INPUT ROI (Region of Interest)
+    // calcolo di quale porzione dell'immagine di input serve a QUESTO blocco di thread
+    // trovare il pixel input corrispondente all'angolo in alto a sinistra del blocco output
     int start_out_x = blockIdx.x * blockDim.x;
     int start_out_y = blockIdx.y * blockDim.y;
 
-    // Mappiamo l'angolo del blocco output sullo spazio input
+    // angolo del blocco output mappato sullo spazio input
     int base_src_x = (int)(start_out_x * x_ratio);
     int base_src_y = (int)(start_out_y * y_ratio);
 
-    // Spostiamo l'origine indietro di 1 per coprire l'Halo sinistro/superiore (necessario per bicubica m=-1)
+    // origine indietro di 1 per coprire l'Halo sinistro/superiore (necessario per bicubica m=-1)
     base_src_x -= 1;
     base_src_y -= 1;
 
-    // --- 2. CARICAMENTO IN SHARED MEMORY ---
+    // #2 - CARICAMENTO IN SHARED MEMORY
     // Allocazione statica: [Y][X][Canali RGB]
     __shared__ unsigned char s_input[SHARED_DIM][SHARED_DIM][3];
 
-    // Linearizziamo i thread per il caricamento cooperativo
+    // thread linearizzati per il caricamento cooperativo
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
-    int num_threads = blockDim.x * blockDim.y; // 256 thread
+    int num_threads = blockDim.x * blockDim.y;
 
     // Ogni thread carica uno o più pixel nella shared memory finché non riempiamo SHARED_DIM x SHARED_DIM
     // Nota: In upscaling, l'area utile reale è piccola, ma carichiamo una regione fissa per semplicità e sicurezza.
@@ -395,6 +399,7 @@ int main() {
 
     return 0;
 }
+
 
 
 
