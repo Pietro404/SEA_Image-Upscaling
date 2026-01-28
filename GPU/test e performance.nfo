@@ -1,3 +1,5 @@
+https://notebooklm.google.com/notebook/f02010ef-e6fd-474f-be56-116dbc3cbbc8
+
 Per ottimizzare un programma di upscaling dell'immagine (Nearest Neighbor, Bilineare, Bicubico) in CUDA, è possibile seguire un percorso di raffinamento incrementale basato sulla gerarchia di memoria e sull'efficienza del parallelismo.
 
 Di seguito sono descritte le strategie di ottimizzazione per ogni versione e le modalità per testare le prestazioni.
