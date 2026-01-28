@@ -42,18 +42,22 @@ __global__ void nn_kernel(
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
+	// Controllo dei bordi: assicura che il thread sia dentro l'immagine 
     if (x >= new_width || y >= new_height) return;
-	//eseguire test solo int eliminando da qui
+	
+	//TODO: eseguire test solo int eliminando da qui
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
 	
     int src_x = (int)(x * x_ratio);
     int src_y = (int)(y * y_ratio);
 	//a qui
+
 	/*e mantenere solo questo
 	int src_x = (x * width) / new_width;
     int src_y = (y * height) / new_height;
 	*/
+
     if (src_x >= width)  src_x = width - 1;
     if (src_y >= height) src_y = height - 1;
 	
@@ -76,6 +80,7 @@ __global__ void bilinear_kernel(
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
+	// Controllo dei bordi: assicura che il thread sia dentro l'immagine 
     if (x >= new_width || y >= new_height) return;
 
     float x_ratio = (float)(width - 1) / new_width;
@@ -131,6 +136,7 @@ __global__ void bicubic_kernel(
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
+	// Controllo dei bordi: assicura che il thread sia dentro l'immagine 
     if (x >= new_width || y >= new_height) return;
 
     float x_ratio = (float)width / new_width;
@@ -185,7 +191,7 @@ void resize_cuda(
     CHECK(cudaMalloc(&d_output, out_size));
     CHECK(cudaMemcpy(d_input, h_input, in_size, cudaMemcpyHostToDevice));
     
-    // Set up grid and block dimensions
+    //2D Set up grid and block dimensions 16X16=256t
     dim3 block(16, 16);
     dim3 grid((new_width + block.x - 1) / block.x,
               (new_height + block.y - 1) / block.y);
@@ -274,6 +280,7 @@ int main() {
 
     return 0;
 }
+
 
 
 
