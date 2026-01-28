@@ -1,0 +1,43 @@
+Per ottimizzare un programma di upscaling dell'immagine (Nearest Neighbor, Bilineare, Bicubico) in CUDA, è possibile seguire un percorso di raffinamento incrementale basato sulla gerarchia di memoria e sull'efficienza del parallelismo.
+
+Di seguito sono descritte le strategie di ottimizzazione per ogni versione e le modalità per testare le prestazioni.
+
+### Versioni Incrementali e Ottimizzazioni
+
+#### v1: Versione Naive (Base)
+In questa versione, l'obiettivo primario è il funzionamento corretto del mapping tra thread e pixel.
+*   **Mappatura 2D:** È consigliabile utilizzare una configurazione di griglia e blocchi 2D per riflettere la natura bidimensionale dell'immagine. Ogni thread calcola un pixel dell'immagine di output.
+*   **Accesso Coalescente:** L'ottimizzazione principale consiste nel garantire che i thread di un warp accedano a indirizzi di memoria globale contigui (coalescenza), minimizzando le transazioni verso la DRAM.
+*   **Gestione dei Bordi:** Poiché le dimensioni dell'immagine raramente sono multipli esatti della dimensione del blocco, è essenziale inserire controlli (`if (ix < width && iy < height)`) per evitare accessi fuori limite.
+
+#### v2: Utilizzo della Shared Memory
+La **Shared Memory** è una memoria on-chip ad alta velocità (20-30 volte più veloce della memoria globale) condivisa tra i thread di un blocco.
+*   **Data Reuse (Tiling):** Per l'upscaling bilineare e bicubico, ogni thread necessita dei pixel vicini. Senza shared memory, molti thread leggerebbero ripetutamente gli stessi pixel dalla memoria globale lenta. Nella v2, i thread caricano una "tile" (mattonella) di pixel dall'immagine originale nella shared memory.
+*   **Sincronizzazione:** Dopo il caricamento, è necessario utilizzare `__syncthreads()` per garantire che tutti i thread abbiano finito di scrivere nella memoria condivisa prima di iniziare l'interpolazione.
+*   **Riduzione della Latenza:** L'accesso ai pixel per l'interpolazione avviene ora on-chip, riducendo drasticamente i tempi di attesa.
+
+#### v3: Utilizzo della Constant Memory
+La **Constant Memory** (64 KB totali) è una memoria off-chip con una cache dedicata molto veloce, ideale per dati di sola lettura condivisi da tutti i thread.
+*   **Coefficienti di Interpolazione:** Nell'upscaling bilineare e specialmente nel bicubico, si utilizzano pesi o coefficienti matematici fissi. Invece di ricalcolarli o tenerli nei registri di ogni thread, possono essere memorizzati in constant memory.
+*   **Broadcast Effettivo:** Quando tutti i thread di un warp leggono lo stesso indirizzo (come accade per i coefficienti), la constant memory esegue un "broadcast" del dato, risparmiando larghezza di banda e registri.
+
+---
+
+### Calcolo delle Performance e Test
+
+Per valutare l'efficacia delle ottimizzazioni con parametri differenti (es. diverse risoluzioni o dimensioni dei blocchi), si adottano i seguenti metodi:
+
+#### 1. Misurazione del Tempo (Timing)
+*   **Timer CPU:** È possibile usare funzioni come `gettimeofday` o `timespec_get` sul lato host, ricordando di inserire `cudaDeviceSynchronize()` prima di fermare il timer per assicurarsi che la GPU abbia completato il lavoro.
+*   **Nsight Systems:** Questo strumento permette di visualizzare la timeline completa, identificando se il collo di bottiglia è il trasferimento dati tramite PCIe o l'esecuzione effettiva del kernel.
+
+#### 2. Metriche Avanzate con Nsight Compute
+Per un'analisi approfondita del singolo kernel, **Nsight Compute** fornisce metriche cruciali:
+*   **Memory Throughput:** Indica quanti GB/s vengono effettivamente trasferiti. Un aumento di questa metrica tra v1 e v2 indica un migliore utilizzo della banda.
+*   **Occupancy:** Misura quanto le risorse dell'SM (Streaming Multiprocessor) sono sature. Un'occupancy tra il 50% e l'80% è generalmente considerata buona per nascondere la latenza.
+*   **Bank Conflicts:** Nella v2, è importante controllare se l'accesso alla shared memory causa conflitti di banco, che serializzano l'esecuzione riducendo le prestazioni.
+
+#### 3. Test con Parametri Differenti
+*   **Dimensione del Blocco:** Testare configurazioni come 16x16 o 32x32 thread. Blocchi multipli di 32 (dimensione del warp) sono essenziali per evitare sprechi di risorse.
+*   **Risoluzione dell'Immagine:** Verificare come scala il tempo all'aumentare dei megapixel. Notare se il kernel rimane **Memory Bound** (limitato dalla memoria) o diventa **Compute Bound** (limitato dal calcolo) tramite il **modello Roofline** integrato nei profiler.
+*   **Speedup:** Calcolare lo speedup come il rapporto tra il tempo della versione naive (o CPU) e quello della versione ottimizzata ($Tempo_{naive} / Tempo_{ottimizzato}$).
