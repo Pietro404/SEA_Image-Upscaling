@@ -5,9 +5,8 @@ Un thread CUDA per pixel di output
 Mappatura diretta:
 (blockIdx, threadIdx) → (x, y) del pixel upscalato
 
-Nessun uso di shared memory
-
 Accessi diretti alla memoria globale
+Nessun uso di shared memory
 
 Kernel separati per:
 Nearest Neighbor
@@ -18,3 +17,64 @@ Ogni thread:
 calcola la posizione sorgente (src_x, src_y)
 legge i pixel necessari dalla memoria globale
 scrive il pixel risultante in output
+
+
+Dettaglio della configurazione della griglia e della gestione della memoria.
+
+---
+
+## 1. Configurazione di Griglia e Blocchi
+
+Il codice utilizza una **gerarchia a due dimensioni (2D)** sia per i blocchi che per la griglia. Questo è l'approccio standard per l'elaborazione di immagini, poiché permette di mappare direttamente le coordinate  dei pixel ai thread.
+
+### I Dettagli:
+
+* **Blocchi (`block`):** Definiti come `dim3 block(16, 16);`. Ogni blocco contiene  thread.
+* **Griglia (`grid`):** Calcolata in base alle dimensioni dell'immagine di **output** (`new_width`, `new_height`):
+* `grid.x = (new_width + block.x - 1) / block.x`
+* `grid.y = (new_height + block.y - 1) / block.y`
+
+
+
+### Il "Perché":
+
+1. **Mappatura Spaziale:** Poiché un'immagine è una matrice bidimensionale, usare `blockIdx.x/y` e `threadIdx.x/y` semplifica il calcolo dell'indice del pixel:
+
+
+
+2. **Copertura Totale:** La formula utilizzata per la griglia è una **divisione per eccesso**. Serve a garantire che, se la dimensione dell'immagine non è un multiplo esatto di 16, ci siano abbastanza blocchi per coprire i pixel rimanenti (i thread in eccesso vengono poi bloccati dall'istruzione `if (x >= new_width || y >= new_height) return;`).
+3. **Efficienza Hardware:** Un blocco di 256 thread è un buon compromesso per massimizzare l'occupazione delle unità computazionali (SM) sulla maggior parte delle GPU NVIDIA.
+
+---
+
+## 2. Tipo di Accesso alla Memoria
+
+Il codice utilizza esclusivamente la **Memoria Globale (VRAM)**. Non viene fatto uso di *Shared Memory* o *Texture Memory*.
+
+### Caratteristiche dell'accesso:
+
+* **Scrittura (Output): Coalescente (Coalesced).**
+I thread appartenenti allo stesso *warp* (gruppo di 32 thread consecutivi) accedono a pixel contigui nell'immagine di output. Poiché l'indice calcolato è `(y * new_width + x)`, quando `x` aumenta di 1 (thread adiacenti), l'indirizzo di memoria aumenta di 1 unità (moltiplicato per i canali). Questo permette all'hardware di raggruppare molteplici richieste di scrittura in un'unica transazione di memoria, massimizzando la banda passante.
+* **Lettura (Input): Non perfettamente coalescente (Strided/Random).**
+Nel ridimensionamento (scaling), l'indice di lettura `src_x` e `src_y` dipende da un rapporto (`x_ratio`).
+* In un **upscaling** (come nel tuo caso, `mul = 4`), più thread leggeranno lo stesso pixel di input (accesso ridondante).
+* Gli indici calcolati non sono necessariamente contigui o allineati. Tuttavia, grazie alla cache L1/L2 delle GPU moderne, l'impatto negativo è parzialmente mitigato.
+
+
+
+### Il "Perché":
+
+* **Semplicità:** L'accesso diretto alla memoria globale è il più semplice da implementare.
+* **Natura dell'algoritmo:** Poiché ogni pixel di output viene calcolato indipendentemente, non c'è una forte condivisione di dati tra thread vicini che giustifichi l'uso della *Shared Memory* (tranne forse nella versione bicubica, dove si leggono pixel vicini, ma la complessità aumenterebbe notevolmente).
+
+---
+
+### Sintesi Tecnica
+
+| Componente | Configurazione/Tipo |
+| --- | --- |
+| **Dimensione Blocco** |  (2D) |
+| **Dimensione Griglia** | Dinamica, basata sui pixel di output |
+| **Memoria utilizzata** | Global Memory |
+| **Pattern di Scrittura** | Coalescente (ottimale) |
+| **Pattern di Lettura** | Indiretto/Scalato (sub-ottimale ma gestito dalla cache) |
