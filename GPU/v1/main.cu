@@ -76,6 +76,7 @@ __global__ void bilinear_kernel(
     int width, int height,
     int new_width, int new_height,
     int channels
+	//float x_ratio, float y_ratio
 ) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -83,6 +84,8 @@ __global__ void bilinear_kernel(
 	// Controllo dei bordi: assicura che il thread sia dentro l'immagine 
     if (x >= new_width || y >= new_height) return;
 
+	//TODO: PROVARE a passare valore fix da CPU!
+	//Eliminare x/y_ratio qua e aggiungere lato host
     float x_ratio = (float)(width - 1) / new_width;
     float y_ratio = (float)(height - 1) / new_height;
 
@@ -222,7 +225,11 @@ void resize_cuda(
 }
 
 //esegue su CPU
-int main() {
+int main(int argc, char** argv) {
+    if (argc < 4) {
+        printf("Usage: %s input.png scale algorithm(0 = nearest|1 = bilinear|2 = bicubic)\n", argv[0]);
+        return 0;
+    }
     int width, height, channels;
 
     //---chk--->Prop. del dispositivo
@@ -235,11 +242,11 @@ int main() {
     //---
     
     //filename and format
-    const char *imgName = "mario_hd.png";
+    const char *imgName = argv[1];
     //upscaling factor
-    int mul = 4;
+    int mul = atoi(argv[2]);
     //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
-    int interpolation = 2;
+    int interpolation = atoi(argv[3]);
 
     const char *mode;
     if (interpolation == 0)
@@ -265,6 +272,10 @@ int main() {
     unsigned char *resized = (unsigned char*) malloc(new_width * new_height * channels); 
     
 	//calls device
+	//provare a passare float x_ratio, float y_ratio direttamente da qua
+	//float x_ratio = (float)(width - 1) / new_width;
+    //float y_ratio = (float)(height - 1) / new_height;
+	//riscrivere resize_cuda con param()
     resize_cuda(image, resized, width, height, new_width, new_height, channels, interpolation);
     
     // Save the output image
@@ -280,6 +291,7 @@ int main() {
 
     return 0;
 }
+
 
 
 
