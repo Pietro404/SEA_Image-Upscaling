@@ -341,7 +341,11 @@ void resize_cuda(
 }
 
 //esegue su CPU
-int main() {
+int main(int argc, char** argv) {
+    if (argc < 4) {
+        printf("Usage: %s input.png scale algorithm(0 = nearest|1 = bilinear|2 = bicubic)\n", argv[0]);
+        return 0;
+    }
     int width, height, channels;
 
     //---chk--->Prop. del dispositivo
@@ -354,11 +358,11 @@ int main() {
     //---
     
     //filename and format
-    const char *imgName = "mario_hd.png";
+    const char *imgName = argv[1];
     //upscaling factor
-    int mul = 4;
+    int mul = atoi(argv[2]);
     //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
-    int interpolation = 2;
+    int interpolation = atoi(argv[3]);
 
     const char *mode;
     if (interpolation == 0)
@@ -399,6 +403,7 @@ int main() {
 
     return 0;
 }
+
 
 
 
