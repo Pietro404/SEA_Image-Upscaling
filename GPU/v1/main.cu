@@ -58,6 +58,7 @@ __global__ void nn_kernel(
     int src_y = (y * height) / new_height;
 	*/
 
+    //vedere se tenere
     if (src_x >= width)  src_x = width - 1;
     if (src_y >= height) src_y = height - 1;
 	
@@ -67,6 +68,15 @@ __global__ void nn_kernel(
         output[(y * new_width + x) * channels + c] =
             input[(src_y * width + src_x) * channels + c];
     }
+    
+    /*nessuna variazione significativa come in cpu
+    int in_idx = (src_y * width + src_x) * channels;
+    int out_idx = (y * new_width + x) * channels;
+
+    output[out_idx + 0] = input[in_idx + 0];
+    output[out_idx + 1] = input[in_idx + 1];
+    output[out_idx + 2] = input[in_idx + 2];
+    */
 }
 
 //Bilineare
@@ -291,6 +301,7 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
 
 
 
