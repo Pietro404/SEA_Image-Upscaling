@@ -324,21 +324,36 @@ void resize_cuda(
     printf("CUDA status: %s\n", cudaGetErrorString(cudaGetLastError()));
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc < 4) {
+        printf("Usage: %s input.png scale algorithm(0 = nearest|1 = bilinear|2 = bicubic)\n", argv[0]);
+        return 0;
+    }
     int width, height, channels;
 
+    //---chk--->Prop. del dispositivo
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0); 
-    printf("Device: %s\n", prop.name);
+    printf("Nome Dispositivo: %s\n", prop.name);
+    printf("Memoria Gloable Totale: %.0f MB\n", prop.totalGlobalMem / 1024.0 / 1024.0);
+    printf("Clock Core: %d MHz\n", prop.clockRate / 1000);
+    printf("Compute Capability: %d.%d\n\n", prop.major, prop.minor);
+    //---
     
-    const char *imgName = "mario_hd.png";
-    int mul = 4;
-    int interpolation = 0; // 0=NN, 1=BiLinear, 2=BiCubic
+    //filename and format
+    const char *imgName = argv[1];
+    //upscaling factor
+    int mul = atoi(argv[2]);
+    //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
+    int interpolation = atoi(argv[3]);
 
-    const char *modeStr;
-    if (interpolation == 0) modeStr = "NN";
-    else if (interpolation == 1) modeStr = "BL";
-    else modeStr = "BC";
+    const char *mode;
+    if (interpolation == 0)
+        mode = "NN";
+    else if (interpolation == 1)
+        mode = "BL";
+    else
+        mode = "BC";
 
     unsigned char *image = stbi_load(imgName, &width, &height, &channels, 3);
     if (!image) {
@@ -365,4 +380,5 @@ int main() {
     CHECK(cudaDeviceReset());
 
     return 0;
+
 }
