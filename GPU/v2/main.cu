@@ -102,8 +102,8 @@ __global__ void bilinear_kernel_shared(
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    float x_ratio = (float)(width - 1) / new_width;
-    float y_ratio = (float)(height - 1) / new_height;
+    float x_ratio = (float)width / new_width;
+    float y_ratio = (float)height / new_height;
 
     // L'angolo in alto a sinistra della zona di input necessaria al blocco
     int base_src_x = (int)((blockIdx.x * blockDim.x) * x_ratio);
@@ -403,6 +403,7 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
 
 
 
