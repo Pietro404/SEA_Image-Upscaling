@@ -1,16 +1,16 @@
-// Include STB image libraries
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-//rimuove warnings
-#pragma nv_diag_suppress 550
-
-#include "stb_image.h"
-#include "stb_image_write.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
 #include <time.h>
+#include <string.h>
+
+// Include STB image libraries
+//rimuove warnings
+#pragma nv_diag_suppress 550
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
 //Fornisce file, riga, codice e descrizione dell'errore
 #define CHECK(call) \
@@ -403,6 +403,7 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
 
 
 
