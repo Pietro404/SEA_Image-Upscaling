@@ -96,8 +96,8 @@ __global__ void bilinear_kernel(
 
 	//TODO: PROVARE a passare valore fix da CPU!
 	//Eliminare x/y_ratio qua e aggiungere lato host
-    float x_ratio = (float)(width - 1) / new_width;
-    float y_ratio = (float)(height - 1) / new_height;
+    float x_ratio = (float)width / new_width;
+    float y_ratio = (float)height / new_height;
 
     float gx = x * x_ratio;
     float gy = y * y_ratio;
@@ -301,6 +301,7 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
 
 
 
