@@ -185,7 +185,7 @@ __global__ void bicubic_kernel(
     }
 }
 
-//esegue lato GPU
+//funzione host
 void resize_cuda(
     unsigned char *h_input,
     unsigned char *h_output,
@@ -301,6 +301,7 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
 
 
 
