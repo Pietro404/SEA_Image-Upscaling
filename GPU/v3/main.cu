@@ -276,21 +276,11 @@ void resize_cuda(
     host_params.new_width = new_width;
     host_params.new_height = new_height;
     host_params.channels = channels;
-    // Calcoliamo i ratio qui (Host) e non nel kernel per efficienza
-    if (mode == 0) { // NN usa standard ratio
-        host_params.x_ratio = (float)width / new_width;
-        host_params.y_ratio = (float)height / new_height;
-    } else { // Bilineare/Bicubica usano -1 ratio per allineamento
-        host_params.x_ratio = (float)(width - 1) / new_width; 
-        host_params.y_ratio = (float)(height - 1) / new_height;
-        // Nota: per Bicubica classica spesso si usa il ratio standard, 
-        // ma qui manteniamo coerenza con la versione bilineare per semplicità.
-        if (mode == 2) {
-             host_params.x_ratio = (float)width / new_width;
-             host_params.y_ratio = (float)height / new_height;
-        }
-    }
 
+    // Calcoliamo i ratio qui (Host) e non nel kernel per efficienza
+    host_params.x_ratio = (float)width / new_width;
+    host_params.y_ratio = (float)height / new_height;
+    
     // COPIA IN CONSTANT MEMORY
     // cudaMemcpyToSymbol copia dalla memoria host al simbolo __constant__ nel device
     CHECK(cudaMemcpyToSymbol(c_params, &host_params, sizeof(KernelParams)));
@@ -382,4 +372,3 @@ int main(int argc, char** argv) {
     return 0;
 
 }
-
