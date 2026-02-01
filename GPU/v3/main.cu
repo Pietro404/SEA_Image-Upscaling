@@ -351,7 +351,7 @@ int main(int argc, char** argv) {
     resize_cuda(image, resized, width, height, new_width, new_height, channels, interpolation);
     
     char outputName[256];
-    snprintf(outputName, sizeof(outputName), "cm_upscaled_x%d_%s_%s", mul, modeStr, imgName);
+    snprintf(outputName, sizeof(outputName), "cm_upscaled_x%d_%s_%s", mul, mode, imgName);
     stbi_write_png(outputName, new_width, new_height, channels, resized, new_width * channels);
     printf("\nUpscaling CUDA completato: %s\n", outputName);
     
@@ -361,3 +361,4 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
