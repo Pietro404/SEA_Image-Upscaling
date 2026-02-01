@@ -83,38 +83,56 @@ __global__ void nn_kernel_shared(
 	// Riduzione della Latenza: s_input risiede nella cache on-chip (L1/Shared), molto più veloce della DRAM globale
     __shared__ unsigned char s_input[SHARED_DIM][SHARED_DIM][3];
 
-    // Caricamento cooperativo
+    // Thread linearizzati per il caricamento cooperativo
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
-    for (int i = tid; i < SHARED_DIM * SHARED_DIM; i += (blockDim.x * blockDim.y)) {
-        int s_r = i / SHARED_DIM;
-        int s_c = i % SHARED_DIM;
-			
-		// Clamp per sicurezza sui bordi globali
-        int gx = clamp(base_src_x + s_c, 0, width - 1);
-        int gy = clamp(base_src_y + s_r, 0, height - 1);
-		
+    int num_threads = blockDim.x * blockDim.y;
+
+    // Ogni thread carica uno o più pixel nella shared memory finché non riempiamo SHARED_DIM x SHARED_DIM
+    // Nota: in upscaling l'area utile reale è piccola ma si carica una regione fissa per semplicità e sicurezza
+    for (int i = tid; i < SHARED_DIM * SHARED_DIM; i += num_threads) {
+        int s_r = i / SHARED_DIM; // riga in shared
+        int s_c = i % SHARED_DIM; // colonna in shared
+
+        // Coordinate globali corrispondenti nell'immagine di Input
+        int global_src_y = base_src_y + s_r;
+        int global_src_x = base_src_x + s_c;
+
+        // Clamp ai bordi dell'immagine originale
+		global_src_y = clamp(global_src_y, 0, height - 1);
+        global_src_x = clamp(global_src_x, 0, width - 1);
+
 		/* precedente clamp manuale con min
 		// possibile eseguire test per confronto
-        int gx = min(base_src_x + s_c, width - 1);
-        int gy = min(base_src_y + s_r, height - 1);
+        int global_src_x = min(base_src_x + s_c, width - 1);
+        int global_src_y = min(base_src_y + s_r, height - 1);
 		*/
-        
-        int g_idx = (gy * width + gx) * channels;
-        s_input[s_r][s_c][0] = input[g_idx + 0];
-        s_input[s_r][s_c][1] = input[g_idx + 1];
-        s_input[s_r][s_c][2] = input[g_idx + 2];
-    }
-    __syncthreads();
 
+        // Lettura coalesced (se possibile) e scrittura in shared
+        int idx_global = (global_src_y * width + global_src_x) * channels;
+        
+        // Unrolling manuale dei canali per evitare loop interni nel caricamento
+        if (channels == 3) {
+             s_input[s_r][s_c][0] = input[idx_global + 0];
+             s_input[s_r][s_c][1] = input[idx_global + 1];
+             s_input[s_r][s_c][2] = input[idx_global + 2];
+        }
+    }
+
+    // Barriera per attesa che tutti i thread abbiano finito caricamento cache
+    __syncthreads();
+	
+	// Check limiti output
     if (x >= new_width || y >= new_height) return;
 
-    // Logica NN: prendi il pixel più vicino
-    int src_x = (int)(x * x_ratio);
-    int src_y = (int)(y * y_ratio);
+    // Logica NN: prende il pixel più vicino
+	// Coordinate da float direttamente intere nello spazio input
+    int gx = (int)(x * x_ratio);
+    int gy = (int)(y * y_ratio);
 
-    // Mapping su shared memory
-    int s_x = src_x - base_src_x;
-    int s_y = src_y - base_src_y;
+    // Calcolo indici relativi alla tile specifica in shared memory (mapping)
+    // La shared memory inizia da (base_src_x, base_src_y) (relative coordinate)
+    int s_x = gx - base_src_x;
+    int s_y = gy - base_src_y;
     
     // Clamp per sicurezza (evita fuori intervallo shared)
 	s_x = clamp(s_x, 0, SHARED_DIM - 1);
@@ -203,7 +221,7 @@ __global__ void bilinear_kernel_shared(
     float dx = gx - x0;
     float dy = gy - y0;
 
-    // Calcolo indici relativi alla tile specifica in shared memory 
+    // Calcolo indici relativi alla tile specifica in shared memory (mapping)
     // La shared memory inizia da (base_src_x, base_src_y) (relative coordinate)
     int s_x0 = x0 - base_src_x;
     int s_y0 = y0 - base_src_y;
@@ -329,7 +347,7 @@ __global__ void bicubic_kernel_shared(
     float dx = gx - x_int;
     float dy = gy - y_int;
 
-    // Calcolo indici relativi alla tile specifica in shared memory 
+    // Calcolo indici relativi alla tile specifica in shared memory (mapping)
     // La shared memory inizia da (base_src_x, base_src_y) (relative coordinate)
     int s_x_int = x_int - base_src_x;
     int s_y_int = y_int - base_src_y;
@@ -491,3 +509,4 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
