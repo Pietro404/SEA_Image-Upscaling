@@ -52,24 +52,35 @@ __device__ T clamp(T value, T low, T high) {
     return (value < low) ? low : ((value > high) ? high : value);
 }
 
-//Nearest Neighbor
+// Nearest Neighbor
 __global__ void nn_kernel_shared(
     unsigned char *input, unsigned char *output,
     int width, int height,
 	int new_width, int new_height,
 	int channels
 ) {
+	// Coordinate globali del pixel di output
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
+    // Rapporto di scala
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
 
-    // Coordinate di base per il caricamento della tile
-    int base_src_x = (int)(blockIdx.x * blockDim.x * x_ratio);
-    int base_src_y = (int)(blockIdx.y * blockDim.y * y_ratio);
+    // Identificazione area input ROI (Region of Interest):
+    // calcolo di quale porzione dell'immagine di input serve a questo* blocco di thread
+    // (trovare il pixel input corrispondente all'angolo in alto a sinistra del blocco output)
+    int start_out_x = blockIdx.x * blockDim.x;
+    int start_out_y = blockIdx.y * blockDim.y;
 
-	//Riduzione della Latenza: s_input risiede nella cache on-chip (L1/Shared), molto più veloce della DRAM globale
+    // Coordinate di base per il caricamento della tile: angolo del blocco output mappato sullo spazio input
+	// (angolo in alto a sx della zona di input necessaria al blocco)
+    int base_src_x = (int)(start_out_x * x_ratio);
+    int base_src_y = (int)(start_out_y * y_ratio);
+
+    // Caricamento in shared memory
+    // Allocazione statica: [Y][X][Canali RGB]
+	// Riduzione della Latenza: s_input risiede nella cache on-chip (L1/Shared), molto più veloce della DRAM globale
     __shared__ unsigned char s_input[SHARED_DIM][SHARED_DIM][3];
 
     // Caricamento cooperativo
@@ -114,62 +125,94 @@ __global__ void nn_kernel_shared(
     }
 }
 
-//Bilineare
+// Bilineare
 __global__ void bilinear_kernel_shared(
     unsigned char *input, unsigned char *output,
     int width, int height,
 	int new_width, int new_height,
 	int channels
 ) {
+	// Coordinate globali del pixel di output
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
+    // Rapporto di scala
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
 
-    // L'angolo in alto a sinistra della zona di input necessaria al blocco
-    int base_src_x = (int)((blockIdx.x * blockDim.x) * x_ratio);
-    int base_src_y = (int)((blockIdx.y * blockDim.y) * y_ratio);
+    // Identificazione area input ROI (Region of Interest):
+    // calcolo di quale porzione dell'immagine di input serve a questo* blocco di thread
+    // (trovare il pixel input corrispondente all'angolo in alto a sinistra del blocco output)
+    int start_out_x = blockIdx.x * blockDim.x;
+    int start_out_y = blockIdx.y * blockDim.y;
+
+    // Coordinate di base per il caricamento della tile: angolo del blocco output mappato sullo spazio input
+	// (angolo in alto a sx della zona di input necessaria al blocco)
+    int base_src_x = (int)(start_out_x * x_ratio);
+    int base_src_y = (int)(start_out_y * y_ratio);
 	
-	//Riduzione della Latenza: s_input risiede nella cache on-chip (L1/Shared), molto più veloce della DRAM globale
+    // Caricamento in shared memory
+    // Allocazione statica: [Y][X][Canali RGB]
+	// Riduzione della Latenza: s_input risiede nella cache on-chip (L1/Shared), molto più veloce della DRAM globale
     __shared__ unsigned char s_input[SHARED_DIM][SHARED_DIM][3];
 
-    // Caricamento cooperativo (identico alla bicubica, copre l'area SHARED_DIM x SHARED_DIM)
+	// Thread linearizzati per il caricamento cooperativo
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
-    for (int i = tid; i < SHARED_DIM * SHARED_DIM; i += (blockDim.x * blockDim.y)) {
-        int s_r = i / SHARED_DIM;
-        int s_c = i % SHARED_DIM;
-		// Uso clamp invece di min per sicurezza totale sui bordi immagine
-        int gx = clamp(base_src_x + s_c, 0, width - 1);
-        int gy = clamp(base_src_y + s_r, 0, height - 1);
-		
-        int g_idx = (gy * width + gx) * channels;
-        s_input[s_r][s_c][0] = input[g_idx + 0];
-        s_input[s_r][s_c][1] = input[g_idx + 1];
-        s_input[s_r][s_c][2] = input[g_idx + 2];
+    int num_threads = blockDim.x * blockDim.y;
+
+    // Ogni thread carica uno o più pixel nella shared memory finché non riempiamo SHARED_DIM x SHARED_DIM
+	// Caricamento cooperativo (identico alla bicubica, copre l'area SHARED_DIM x SHARED_DIM)
+    // Nota: in upscaling l'area utile reale è piccola ma si carica una regione fissa per semplicità e sicurezza
+    for (int i = tid; i < SHARED_DIM * SHARED_DIM; i += num_threads) {
+        int s_r = i / SHARED_DIM; // riga in shared
+        int s_c = i % SHARED_DIM; // colonna in shared
+
+        // Coordinate globali corrispondenti nell'immagine di Input
+        int global_src_y = base_src_y + s_r;
+        int global_src_x = base_src_x + s_c;
+
+        // Clamp ai bordi dell'immagine originale
+		global_src_y = clamp(global_src_y, 0, height - 1);
+        global_src_x = clamp(global_src_x, 0, width - 1);
+
+        // Lettura coalesced (se possibile) e scrittura in shared
+        int idx_global = (global_src_y * width + global_src_x) * channels;
+        
+        // Unrolling manuale dei canali per evitare loop interni nel caricamento
+        if (channels == 3) {
+             s_input[s_r][s_c][0] = input[idx_global + 0];
+             s_input[s_r][s_c][1] = input[idx_global + 1];
+             s_input[s_r][s_c][2] = input[idx_global + 2];
+        }
     }
     __syncthreads();
-
+	
+	// Calcolo bicubico (leggendo solo da shared memory)
+    
+    // Check limiti output
     if (x >= new_width || y >= new_height) return;
 
+    // Coordinate float nello spazio input
     float gx = x * x_ratio;
     float gy = y * y_ratio;
+
+    // Parte intera e frazionaria
     int x0 = (int)gx;
     int y0 = (int)gy;
+    
     float dx = gx - x0;
     float dy = gy - y0;
 
-    // Coordinate relative alla shared memory
+    // Calcolo indici relativi alla tile specifica in shared memory 
+    // La shared memory inizia da (base_src_x, base_src_y) (relative coordinate)
     int s_x0 = x0 - base_src_x;
     int s_y0 = y0 - base_src_y;
 	
     // Clamp su indici sm (previene crash o lettura di memoria sporca se il +1 esce dalla tile)
     int s_x0_c = clamp(s_x0, 0, SHARED_DIM - 1);
-	// Colonna successiva s_x1_c
-    int s_x1_c = clamp(s_x0 + 1, 0, SHARED_DIM - 1);
+    int s_x1_c = clamp(s_x0 + 1, 0, SHARED_DIM - 1); // colonna successiva
     int s_y0_c = clamp(s_y0, 0, SHARED_DIM - 1);
-	// Riga successiva s_y1_c
-    int s_y1_c = clamp(s_y0 + 1, 0, SHARED_DIM - 1);
+    int s_y1_c = clamp(s_y0 + 1, 0, SHARED_DIM - 1); // riga successiva
 
     for (int c = 0; c < channels; c++) {
         // Lettura dei 4 vicini "clampati" dalla shared memory
@@ -201,7 +244,7 @@ __device__ float cubic(float x) {
         return 0.0f;
 }
 
-//Bicubica
+// Bicubica
 __global__ void bicubic_kernel_shared(
     unsigned char *input,
     unsigned char *output,
@@ -209,7 +252,7 @@ __global__ void bicubic_kernel_shared(
     int new_width, int new_height,
     int channels
 ) {
-    // Coordinate globali del pixel di OUTPUT
+    // Coordinate globali del pixel di output
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -217,33 +260,35 @@ __global__ void bicubic_kernel_shared(
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
 
-    // #1 - IDENTIFICAZIONE AREA INPUT ROI (Region of Interest)
-    // calcolo di quale porzione dell'immagine di input serve a QUESTO blocco di thread
-    // trovare il pixel input corrispondente all'angolo in alto a sinistra del blocco output
+    // Identificazione area input ROI (Region of Interest):
+    // calcolo di quale porzione dell'immagine di input serve a questo* blocco di thread
+    // (trovare il pixel input corrispondente all'angolo in alto a sinistra del blocco output)
     int start_out_x = blockIdx.x * blockDim.x;
     int start_out_y = blockIdx.y * blockDim.y;
 
-    // angolo del blocco output mappato sullo spazio input
+    // Coordinate di base per il caricamento della tile: angolo del blocco output mappato sullo spazio input
+	// (angolo in alto a sx della zona di input necessaria al blocco)
     int base_src_x = (int)(start_out_x * x_ratio);
     int base_src_y = (int)(start_out_y * y_ratio);
 
-    // origine indietro di 1 per coprire l'Halo sinistro/superiore (necessario per bicubica m=-1)
+    // Origine indietro di 1 per coprire l'Halo sinistro/superiore (necessario per bicubica m=-1)
     base_src_x -= 1;
     base_src_y -= 1;
 
-    // #2 - CARICAMENTO IN SHARED MEMORY
+    // Caricamento in shared memory
     // Allocazione statica: [Y][X][Canali RGB]
+	// Riduzione della Latenza: s_input risiede nella cache on-chip (L1/Shared), molto più veloce della DRAM globale
     __shared__ unsigned char s_input[SHARED_DIM][SHARED_DIM][3];
 
-    // thread linearizzati per il caricamento cooperativo
+    // Thread linearizzati per il caricamento cooperativo
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
     int num_threads = blockDim.x * blockDim.y;
 
     // Ogni thread carica uno o più pixel nella shared memory finché non riempiamo SHARED_DIM x SHARED_DIM
-    // Nota: In upscaling, l'area utile reale è piccola, ma carichiamo una regione fissa per semplicità e sicurezza.
+    // Nota: in upscaling l'area utile reale è piccola ma si carica una regione fissa per semplicità e sicurezza
     for (int i = tid; i < SHARED_DIM * SHARED_DIM; i += num_threads) {
-        int s_r = i / SHARED_DIM; // Riga in shared
-        int s_c = i % SHARED_DIM; // Colonna in shared
+        int s_r = i / SHARED_DIM; // riga in shared
+        int s_c = i % SHARED_DIM; // colonna in shared
 
         // Coordinate globali corrispondenti nell'immagine di Input
         int global_src_y = base_src_y + s_r;
@@ -264,34 +309,34 @@ __global__ void bicubic_kernel_shared(
         }
     }
 
-    // Barriera: aspettiamo che tutti i thread abbiano finito di caricare la cache
+    // Barriera per attesa che tutti i thread abbiano finito caricamento cache
     __syncthreads();
 
-    // --- 3. CALCOLO BICUBICO (Leggendo SOLO da Shared Memory) ---
+    // Calcolo bicubico (leggendo solo da shared memory)
     
     // Check limiti output
     if (x >= new_width || y >= new_height) return;
 
-    // Coordinate float nell'input space
+    // Coordinate float nello spazio input
     float gx = x * x_ratio;
     float gy = y * y_ratio;
 
     // Parte intera e frazionaria
+	// Cambio variabili risp. bilineare per differenziare ma identiche realizzazioni
     int x_int = (int)gx;
     int y_int = (int)gy;
     
     float dx = gx - x_int;
     float dy = gy - y_int;
 
-    // Calcoliamo gli indici relativi alla nostra tile in Shared Memory
-    // La nostra shared memory inizia da (base_src_x, base_src_y)
+    // Calcolo indici relativi alla tile specifica in shared memory 
+    // La shared memory inizia da (base_src_x, base_src_y) (relative coordinate)
     int s_x_int = x_int - base_src_x;
     int s_y_int = y_int - base_src_y;
 
     for (int c = 0; c < channels; c++) {
         float value = 0.0f;
 
-        // Kernel Bicubico 4x4
         #pragma unroll
         for (int m = -1; m <= 2; m++) {
             // Indice Y in shared memory: centro + offset
@@ -320,7 +365,7 @@ __global__ void bicubic_kernel_shared(
 
                 float wx = cubic(n - dx);
 
-                // LETTURA DALLA SHARED MEMORY (Veloce!)
+                // Rapida lettuara da shared memory
                 float pixel = (float)s_input[s_yy][s_xx][c];
                 
                 value += pixel * wx * wy;
@@ -335,7 +380,7 @@ __global__ void bicubic_kernel_shared(
     }
 }
 
-//host function
+// Funzione Host
 void resize_cuda(
     unsigned char *h_input,
     unsigned char *h_output,
@@ -344,17 +389,17 @@ void resize_cuda(
     int channels,
     int mode // 0=NN, 1=Bilineare, 2=Bicubica
 ) {
-    // Allocate device memory
+    // Alloca device memory
     unsigned char *d_input, *d_output;
     int in_size  = width * height * channels;
     int out_size = new_width * new_height * channels;
     
-    //controllo allocazione IO
+    // Controllo allocazione IO
     CHECK(cudaMalloc(&d_input, in_size));
     CHECK(cudaMalloc(&d_output, out_size));
     CHECK(cudaMemcpy(d_input, h_input, in_size, cudaMemcpyHostToDevice));
     
-    // Set up grid and block dimensions
+    // Imposta grid e block
     dim3 block(TILE_W, TILE_H);
     dim3 grid((new_width + block.x - 1) / block.x,
               (new_height + block.y - 1) / block.y);
@@ -362,7 +407,8 @@ void resize_cuda(
 	// Registra il tempo di inizio
 	double iStart = cpuSecond();	
 	
-    //Configurazione di esecuzione: nGrid blocco, nBlock thread. Avvia nBlock istanze parallele del kernel sulla GPU
+    // Configurazione di esecuzione: nGrid blocco, nBlock thread
+	// Avvia nBlock istanze parallele del kernel sulla GPU
     if (mode == 0)
         nn_kernel_shared<<<grid, block>>>(d_input, d_output, width, height, new_width, new_height, channels);
     else if (mode == 1)
@@ -373,9 +419,8 @@ void resize_cuda(
     CHECK(cudaDeviceSynchronize());
 	
 	// Calcola il tempo trascorso
-	double iElaps = cpuSecond() - iStart;
-  //risolve warning dim3 type 
-  printf("kernel <<<(%d,%d), (%d,%d)>>> Time elapsed %f sec\n", grid.x, grid.y, block.x, block.y, iElaps);	
+	double iElaps = cpuSecond() - iStart; 
+	printf("kernel <<<(%d,%d), (%d,%d)>>> Time elapsed %f sec\n", grid.x, grid.y, block.x, block.y, iElaps);	
 	CHECK(cudaMemcpy(h_output, d_output, out_size, cudaMemcpyDeviceToHost));
 
     CHECK(cudaFree(d_input));
@@ -383,7 +428,7 @@ void resize_cuda(
     printf("CUDA error: %s\n", cudaGetErrorString(cudaGetLastError()));
 }
 
-//esegue su CPU
+// Esegue su CPU (Host)
 int main(int argc, char** argv) {
     if (argc < 4) {
         printf("Usage: %s input.png scale algorithm(0 = nearest|1 = bilinear|2 = bicubic)\n", argv[0]);
@@ -391,7 +436,7 @@ int main(int argc, char** argv) {
     }
     int width, height, channels;
 
-    //---chk--->Prop. del dispositivo
+    // Prop. del dispositivo
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0); 
     printf("Nome Dispositivo: %s\n", prop.name);
@@ -400,11 +445,11 @@ int main(int argc, char** argv) {
     printf("Compute Capability: %d.%d\n\n", prop.major, prop.minor);
     //---
     
-    //filename and format
+    // NomeFile.formato
     const char *imgName = argv[1];
-    //upscaling factor
+    // Upscaling factor (moltiplicatore)
     int mul = atoi(argv[2]);
-    //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
+    // Tipo di interpolazione: 0 = NN, 1 = bilinear, 2 = bicubic
     int interpolation = atoi(argv[3]);
 
     const char *mode;
@@ -415,7 +460,7 @@ int main(int argc, char** argv) {
     else
         mode = "BC";
 
-    //load image
+    // Carica immagine
     unsigned char *image = stbi_load(imgName, &width, &height, &channels, 3);
     if (!image) {
         printf("Error loading image %s\n", imgName);
@@ -423,23 +468,23 @@ int main(int argc, char** argv) {
     }
     printf("Image loaded: %dx%d with %d channels\n", width, height, channels);
 
-	//RGB
+	// RGB
     channels = 3;
     int new_width = width * mul;
     int new_height = height * mul;
 
     unsigned char *resized = (unsigned char*) malloc(new_width * new_height * channels); 
     
-	//calls device
+	// Richiama il device
     resize_cuda(image, resized, width, height, new_width, new_height, channels, interpolation);
     
-    // Save the output image
+    // Salva immagine output
     char outputName[256];
     snprintf(outputName, sizeof(outputName), "sm_upscaled_x%d_%s_%s", mul, mode, imgName);
     stbi_write_png(outputName, new_width, new_height, channels, resized, new_width * channels);
     printf("\nUpscaling CUDA di %s completato\n", imgName);
     
-    // Clean up
+    // Pulizia
     stbi_image_free(image);
     free(resized);
     CHECK(cudaDeviceReset());
