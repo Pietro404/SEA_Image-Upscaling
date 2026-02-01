@@ -5,31 +5,12 @@
 #include <string.h>
 
 // Include STB image libraries
-//rimuove warnings
+// Rimuove warnings
 #pragma nv_diag_suppress 550
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
-
-//Fornisce file, riga, codice e descrizione dell'errore
-#define CHECK(call) \
-{ \
-    const cudaError_t error = call; \
-    if (error != cudaSuccess) \
-    { \
-        printf("Error: %s:%d, ", __FILE__, __LINE__); \
-        printf("code: %d, reason: %s\n", error, cudaGetErrorString(error)); \
-        exit(1); \
-    } \
-}
-//Funzione timer CPU: misura il tempo wall-clock visto dalla CPU
-//Imprecisa, genera overhead, deprecata
-double cpuSecond() {
-      struct timespec ts;
-      timespec_get(&ts, TIME_UTC);
-      return ((double)ts.tv_sec + (double)ts.tv_nsec * 1.e-9);
-    }
 
 // Dimensione blocco di thread (Output): 16x16=256t
 #define TILE_W 16
@@ -42,10 +23,41 @@ double cpuSecond() {
 // per downscaling maggiore: test aumentare dimensione 
 #define SHARED_DIM 32    
 
-//NN
+// Fornisce file, riga, codice e descrizione dell'errore
+#define CHECK(call) \
+{ \
+    const cudaError_t error = call; \
+    if (error != cudaSuccess) \
+    { \
+        printf("Error: %s:%d, ", __FILE__, __LINE__); \
+        printf("code: %d, reason: %s\n", error, cudaGetErrorString(error)); \
+        exit(1); \
+    } \
+}
+// Funzione timer CPU: misura il tempo wall-clock visto dalla CPU
+// Imprecisa, genera overhead, deprecata, solo a scopo didattico
+double cpuSecond() {
+      struct timespec ts;
+      timespec_get(&ts, TIME_UTC);
+      return ((double)ts.tv_sec + (double)ts.tv_nsec * 1.e-9);
+    }
+	
+// Funzione Helper per il Clamp (Device)
+// template<> permette gestistione di sia int che float
+// Eseguire test con aggiunta di __forceinline__ dopo __device__ al fine di verificare cambio performance:
+// serve ad assicurare che il compilatore NVCC chiami la funzione direttamente nel punto evitando
+// overhead della chiamata a funzione (rallenterebbe esecuzione all'interno dei loop)
+template <typename T>
+__device__ T clamp(T value, T low, T high) {
+    return (value < low) ? low : ((value > high) ? high : value);
+}
+
+//Nearest Neighbor
 __global__ void nn_kernel_shared(
     unsigned char *input, unsigned char *output,
-    int width, int height, int new_width, int new_height, int channels
+    int width, int height,
+	int new_width, int new_height,
+	int channels
 ) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -65,8 +77,16 @@ __global__ void nn_kernel_shared(
     for (int i = tid; i < SHARED_DIM * SHARED_DIM; i += (blockDim.x * blockDim.y)) {
         int s_r = i / SHARED_DIM;
         int s_c = i % SHARED_DIM;
+			
+		// Clamp per sicurezza sui bordi globali
+        int gx = clamp(base_src_x + s_c, 0, width - 1);
+        int gy = clamp(base_src_y + s_r, 0, height - 1);
+		
+		/* precedente clamp manuale con min
+		// possibile eseguire test per confronto
         int gx = min(base_src_x + s_c, width - 1);
         int gy = min(base_src_y + s_r, height - 1);
+		*/
         
         int g_idx = (gy * width + gx) * channels;
         s_input[s_r][s_c][0] = input[g_idx + 0];
@@ -86,8 +106,8 @@ __global__ void nn_kernel_shared(
     int s_y = src_y - base_src_y;
     
     // Clamp per sicurezza (evita fuori intervallo shared)
-    s_x = max(0, min(s_x, SHARED_DIM - 1));
-    s_y = max(0, min(s_y, SHARED_DIM - 1));
+	s_x = clamp(s_x, 0, SHARED_DIM - 1);
+    s_y = clamp(s_y, 0, SHARED_DIM - 1);
 
     for (int c = 0; c < channels; c++) {
         output[(y * new_width + x) * channels + c] = s_input[s_y][s_x][c];
@@ -97,7 +117,9 @@ __global__ void nn_kernel_shared(
 //Bilineare
 __global__ void bilinear_kernel_shared(
     unsigned char *input, unsigned char *output,
-    int width, int height, int new_width, int new_height, int channels
+    int width, int height,
+	int new_width, int new_height,
+	int channels
 ) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -117,8 +139,10 @@ __global__ void bilinear_kernel_shared(
     for (int i = tid; i < SHARED_DIM * SHARED_DIM; i += (blockDim.x * blockDim.y)) {
         int s_r = i / SHARED_DIM;
         int s_c = i % SHARED_DIM;
-        int gx = min(base_src_x + s_c, width - 1);
-        int gy = min(base_src_y + s_r, height - 1);
+		// Uso clamp invece di min per sicurezza totale sui bordi immagine
+        int gx = clamp(base_src_x + s_c, 0, width - 1);
+        int gy = clamp(base_src_y + s_r, 0, height - 1);
+		
         int g_idx = (gy * width + gx) * channels;
         s_input[s_r][s_c][0] = input[g_idx + 0];
         s_input[s_r][s_c][1] = input[g_idx + 1];
@@ -138,19 +162,29 @@ __global__ void bilinear_kernel_shared(
     // Coordinate relative alla shared memory
     int s_x0 = x0 - base_src_x;
     int s_y0 = y0 - base_src_y;
+	
+    // Clamp su indici sm (previene crash o lettura di memoria sporca se il +1 esce dalla tile)
+    int s_x0_c = clamp(s_x0, 0, SHARED_DIM - 1);
+	// Colonna successiva s_x1_c
+    int s_x1_c = clamp(s_x0 + 1, 0, SHARED_DIM - 1);
+    int s_y0_c = clamp(s_y0, 0, SHARED_DIM - 1);
+	// Riga successiva s_y1_c
+    int s_y1_c = clamp(s_y0 + 1, 0, SHARED_DIM - 1);
 
     for (int c = 0; c < channels; c++) {
-        // Lettura dei 4 vicini dalla Shared Memory
-        float p00 = s_input[s_y0][s_x0][c];
-        float p10 = s_input[s_y0][s_x0 + 1][c];
-        float p01 = s_input[s_y0 + 1][s_x0][c];
-        float p11 = s_input[s_y0 + 1][s_x0 + 1][c];
+        // Lettura dei 4 vicini "clampati" dalla shared memory
+		float p00 = s_input[s_y0_c][s_x0_c][c];
+        float p10 = s_input[s_y0_c][s_x1_c][c]; // usa x1
+        float p01 = s_input[s_y1_c][s_x0_c][c]; // usa y1
+        float p11 = s_input[s_y1_c][s_x1_c][c]; // usa x1 e y1
 
         float value = p00 * (1 - dx) * (1 - dy) +
                       p10 * dx * (1 - dy) +
                       p01 * (1 - dx) * dy +
                       p11 * dx * dy;
 
+		// Clamp finale (opzionale/ridondante per bilineare ma costa poco e buona norma)
+        value = clamp(value, 0.0f, 255.0f);
         output[(y * new_width + x) * channels + c] = (unsigned char)value;
     }
 }
@@ -216,8 +250,8 @@ __global__ void bicubic_kernel_shared(
         int global_src_x = base_src_x + s_c;
 
         // Clamp ai bordi dell'immagine originale
-        global_src_y = max(0, min(global_src_y, height - 1));
-        global_src_x = max(0, min(global_src_x, width - 1));
+		global_src_y = clamp(global_src_y, 0, height - 1);
+        global_src_x = clamp(global_src_x, 0, width - 1);
 
         // Lettura coalesced (se possibile) e scrittura in shared
         int idx_global = (global_src_y * width + global_src_x) * channels;
@@ -260,23 +294,29 @@ __global__ void bicubic_kernel_shared(
         // Kernel Bicubico 4x4
         #pragma unroll
         for (int m = -1; m <= 2; m++) {
-            // Indice Y in shared memory: il centro + offset
-            int s_yy = s_y_int + m;
+            // Indice Y in shared memory: centro + offset
+			// Clamp per sostituire controllo manuale (vedi sotto prev. vers.)
+			int s_yy = clamp(s_y_int + m, 0, SHARED_DIM - 1);
             
-            // Safety check: restiamo dentro i limiti della shared memory allocata
-            // (Con SHARED_DIM=32 e un blocco 16x16 in upscaling, non dovremmo mai uscire)
+            /* Safety check per restare dentro i limiti della shared memory allocata
+			// (anche se non dovremmo uscire con dim impostate)
+			int s_yy = s_y_int + m;
             if (s_yy < 0) s_yy = 0; 
             if (s_yy >= SHARED_DIM) s_yy = SHARED_DIM - 1;
+			*/
 
             float wy = cubic(m - dy);
 
             #pragma unroll
             for (int n = -1; n <= 2; n++) {
-                // Indice X in shared memory
+                // Indice X in shared memory + clamp
+				int s_xx = clamp(s_x_int + n, 0, SHARED_DIM - 1);
+				
+				/* Come precedente
                 int s_xx = s_x_int + n;
-                
                 if (s_xx < 0) s_xx = 0;
                 if (s_xx >= SHARED_DIM) s_xx = SHARED_DIM - 1;
+				*/
 
                 float wx = cubic(n - dx);
 
@@ -286,8 +326,11 @@ __global__ void bicubic_kernel_shared(
                 value += pixel * wx * wy;
             }
         }
-
-        value = fminf(fmaxf(value, 0.0f), 255.0f);
+		
+		// Clamp finale valore pixel (0.0f - 255.0f)
+        value = clamp(value, 0.0f, 255.0f);
+        // Sostituisce precedente:
+		//value = fminf(fmaxf(value, 0.0f), 255.0f);
         output[(y * new_width + x) * channels + c] = (unsigned char)value;
     }
 }
@@ -403,11 +446,3 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-
-
-
-
-
-
-
-
