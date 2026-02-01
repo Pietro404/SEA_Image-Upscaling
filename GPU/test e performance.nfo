@@ -1,7 +1,18 @@
 https://notebooklm.google.com/notebook/f02010ef-e6fd-474f-be56-116dbc3cbbc8
+Compiling and running:
+!nvcc -arch=sm_75 -o main main.cu
+
+// 3 args: nome file / mul / 0=nn 1=bl 2=bc
+!nvprof ./main mario_hd.png 4 2
+!ncu ./main mario_hd.png 4 2
+!ncu -o profile ./main mario_hd.png 4 2 //per generazione file "profile"
+
+Direttive compilatore per analisi e controllo:
+-Xptxas -v,-abi=no: Mostra l'utilizzo delle risorse hardware (numero di registri, bytes di shared memory, etc.).
+-maxrregcount=32: Limita il numero massimo di registri per unità di compilazione (ignorato specificati i launch bounds).
+
 
 Per ottimizzare un programma di upscaling dell'immagine (Nearest Neighbor, Bilineare, Bicubico) in CUDA, è possibile seguire un percorso di raffinamento incrementale basato sulla gerarchia di memoria e sull'efficienza del parallelismo.
-
 Di seguito sono descritte le strategie di ottimizzazione per ogni versione e le modalità per testare le prestazioni.
 
 ### Versioni Incrementali e Ottimizzazioni
