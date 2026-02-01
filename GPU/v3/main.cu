@@ -30,9 +30,9 @@ double cpuSecond() {
       return ((double)ts.tv_sec + (double)ts.tv_nsec * 1.e-9);
 }
 
-// --- PARAMETRI IN CONSTANT MEMORY ---
-// Raggruppiamo i parametri costanti per ridurre l'uso dei registri e 
-// sfruttare la cache delle costanti (velocissima per l'accesso broadcast).
+// PARAMETRI IN CONSTANT MEMORY
+// Raggruppati parametri costanti per ridurre uso dei registri e per
+// sfruttare cache delle costanti (veloce per accesso broadcast)
 struct KernelParams {
     int width;
     int height;
@@ -51,9 +51,7 @@ __constant__ KernelParams c_params;
 #define TILE_H 16
 #define SHARED_DIM 32   
 
-// ------------------------------------------------------------------
-// KERNEL NEAREST NEIGHBOR (Constant + Shared)
-// ------------------------------------------------------------------
+// kernel nn (Constant + Shared)
 __global__ void nn_kernel_const_shared(unsigned char *input, unsigned char *output) {
     // Accesso diretto a c_params senza passarli come argomenti
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -100,9 +98,7 @@ __global__ void nn_kernel_const_shared(unsigned char *input, unsigned char *outp
     }
 }
 
-// ------------------------------------------------------------------
-// KERNEL BILINEARE (Constant + Shared)
-// ------------------------------------------------------------------
+// kernel bl (Constant + Shared)
 __global__ void bilinear_kernel_const_shared(unsigned char *input, unsigned char *output) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -167,9 +163,7 @@ __device__ float cubic(float x) {
     else return 0.0f;
 }
 
-// ------------------------------------------------------------------
-// KERNEL BICUBICA (Constant + Shared)
-// ------------------------------------------------------------------
+// kernel bc (Constant + Shared)
 __global__ void bicubic_kernel_const_shared(unsigned char *input, unsigned char *output) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -249,9 +243,7 @@ __global__ void bicubic_kernel_const_shared(unsigned char *input, unsigned char 
     }
 }
 
-// ------------------------------------------------------------------
-// HOST FUNCTION
-// ------------------------------------------------------------------
+// funzione host
 void resize_cuda(
     unsigned char *h_input,
     unsigned char *h_output,
@@ -268,8 +260,7 @@ void resize_cuda(
     CHECK(cudaMalloc(&d_output, out_size));
     CHECK(cudaMemcpy(d_input, h_input, in_size, cudaMemcpyHostToDevice));
     
-    // --- SETUP CONSTANT MEMORY ---
-    // Prepariamo la struct sulla CPU
+    // config. constant memory (struct su CPU)
     KernelParams host_params;
     host_params.width = width;
     host_params.height = height;
@@ -277,12 +268,12 @@ void resize_cuda(
     host_params.new_height = new_height;
     host_params.channels = channels;
 
-    // Calcoliamo i ratio qui (Host) e non nel kernel per efficienza
+    // calcolo ratio qui (host) e non nel kernel per efficienza
     host_params.x_ratio = (float)width / new_width;
     host_params.y_ratio = (float)height / new_height;
     
-    // COPIA IN CONSTANT MEMORY
-    // cudaMemcpyToSymbol copia dalla memoria host al simbolo __constant__ nel device
+    // copia in constant memory con "cudaMemcpyToSymbol":
+    // copia dalla memoria host al simbolo __constant__ nel device
     CHECK(cudaMemcpyToSymbol(c_params, &host_params, sizeof(KernelParams)));
 
     // Setup Grid
@@ -292,7 +283,7 @@ void resize_cuda(
               
     double iStart = cpuSecond();    
     
-    // Lancio Kernel (Notare che non passiamo più width, height, etc.)
+    // lancio kernel (Nota: non si passano più width, height, ecc...)
     if (mode == 0)
         nn_kernel_const_shared<<<grid, block>>>(d_input, d_output);
     else if (mode == 1)
@@ -321,14 +312,13 @@ int main(int argc, char** argv) {
     }
     int width, height, channels;
 
-    //---chk--->Prop. del dispositivo
+    //prop. del dispositivo
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0); 
     printf("Nome Dispositivo: %s\n", prop.name);
     printf("Memoria Gloable Totale: %.0f MB\n", prop.totalGlobalMem / 1024.0 / 1024.0);
     printf("Clock Core: %d MHz\n", prop.clockRate / 1000);
     printf("Compute Capability: %d.%d\n\n", prop.major, prop.minor);
-    //---
     
     //filename and format
     const char *imgName = argv[1];
@@ -370,5 +360,4 @@ int main(int argc, char** argv) {
     CHECK(cudaDeviceReset());
 
     return 0;
-
 }
