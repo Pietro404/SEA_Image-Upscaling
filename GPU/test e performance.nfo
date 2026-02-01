@@ -1,4 +1,5 @@
 https://notebooklm.google.com/notebook/f02010ef-e6fd-474f-be56-116dbc3cbbc8
+# COLAB
 Compiling and running:
 !nvcc -arch=sm_75 -o main main.cu
 
@@ -6,6 +7,14 @@ Compiling and running:
 !nvprof ./main mario_hd.png 4 2
 !ncu ./main mario_hd.png 4 2
 !ncu -o profile ./main mario_hd.png 4 2 //per generazione file "profile"
+
+# LINUX
+check:
+nvidia-smi
+nvcc --version
+ls -l /dev/nv*
+which nvcc
+nvcc hello.cu -o hello
 
 Direttive compilatore per analisi e controllo:
 -Xptxas -v,-abi=no: Mostra l'utilizzo delle risorse hardware (numero di registri, bytes di shared memory, etc.).
