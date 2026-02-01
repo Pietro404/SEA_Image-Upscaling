@@ -1,0 +1,36 @@
+Nel tuo codice non viene fatto "padding" nel senso classico (ovvero, non stai allargando la matrice dell'immagine aggiungendo righe/colonne di zeri o specchiate attorno all'immagine prima di elaborarla).
+
+Tuttavia, il codice gestisce i bordi utilizzando una tecnica chiamata Clamp-to-Edge (o Edge Replication). In pratica, quando l'algoritmo cerca un pixel fuori dai bordi, il codice lo forza a leggere l'ultimo pixel valido disponibile sul bordo.
+
+Ecco l'analisi dettagliata per i due kernel:
+1. Bilineare (bilinear_kernel_shared)
+
+La gestione avviene durante il caricamento nella Shared Memory. Guarda queste righe nel ciclo di caricamento:
+int gx = min(base_src_x + s_c, width - 1);
+int gy = min(base_src_y + s_r, height - 1);
+Cosa succede: Se il calcolo della coordinata gx (coordinata globale X) supera la larghezza dell'immagine (width - 1), la funzione min costringe l'indice a rimanere su width - 1.
+
+Effetto visivo: Non vedrai bordi neri. Se l'interpolazione richiede un pixel "a destra" del bordo destro, userà due volte l'ultimo pixel destro.
+
+2. Bicubica (bicubic_kernel_shared)
+
+Anche qui la gestione principale è nel caricamento in Shared Memory ("Fase #2" del tuo codice), ma è ancora più esplicita perché la bicubica guarda anche "indietro" (pixel -1):
+// Clamp ai bordi dell'immagine originale
+global_src_y = max(0, min(global_src_y, height - 1));
+global_src_x = max(0, min(global_src_x, width - 1));
+Cosa succede:
+
+    max(0, ...): Se l'algoritmo cerca di leggere un pixel a sinistra dell'immagine (es. coordinata -1), viene forzato a leggere il pixel 0.
+
+    min(..., width - 1): Se cerca di leggere oltre la destra, viene forzato a leggere l'ultimo pixel.
+
+Nota sull'Halo: La bicubica ha bisogno di più dati (un intorno 4x4). Nel tuo codice carichi in shared memory una regione leggermente spostata (base_src_x -= 1) per avere i dati necessari. Se questo spostamento porta a coordinate negative, il max(0, ...) sopra citato risolve il problema duplicando la prima riga/colonna.
+In sintesi
+
+    Fa Zero Padding? No. I bordi non diventano neri/trasparenti.
+
+    Fa Mirror Padding? No. L'immagine non viene riflessa ai bordi.
+
+    Cosa fa realmente? Repeat/Clamp Padding. I pixel del bordo vengono "stirati" o ripetuti per i calcoli che escono dall'area dell'immagine.
+
+Questa è generalmente la soluzione preferita in elaborazione immagini real-time (come nei videogiochi o texture sampling) perché è computazionalmente economica e non introduce artefatti neri.
