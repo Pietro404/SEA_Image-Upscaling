@@ -1,0 +1,9 @@
+g++ cpu_v1.cpp test.cpp -O0 -fopenmp -msse2 -o cpu_v1
+.\cpu_v1
+
+ -> Nearest neighbor CPU v1              time:  133.69 ms        | Througput: 0.331 GB/s         | Bandwidth: 0.662 GB/s
+ -> Nearest neighbor CPU v2              time:  111.05 ms        | Througput: 0.398 GB/s         | Bandwidth: 0.797 GB/s         | Speedup:  1.20x
+ -> Nearest neighbor CPU omp             time:   17.95 ms        | Througput: 2.464 GB/s         | Bandwidth: 4.929 GB/s         | Speedup:  7.45x | comp_units: 16 Eff: 0.47
+ -> Nearest neighbor CPU sse2            time:   53.85 ms        | Througput: 0.821 GB/s         | Bandwidth: 1.643 GB/s         | Speedup:  2.48x
+ -> Nearest neighbor CPU sse2_2          time:   47.51 ms        | Througput: 0.931 GB/s         | Bandwidth: 1.862 GB/s         | Speedup:  2.81x
+ Upscaling RGB completato!

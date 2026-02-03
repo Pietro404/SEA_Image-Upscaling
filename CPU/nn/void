@@ -1,7 +1,0 @@
-g++ cpu_v1.cpp test.cpp -O3 -fopenmp -msse2 -o cpu_v1
-.\cpu_v1
-
- -> Nearest neighbor CPU v1      time:   65.69 ms        | Througput:  0.67 GB/s         | Bandwidth:  1.35 GB/s
- -> Nearest neighbor CPU v2      time:   22.44 ms        | Througput:  1.97 GB/s         | Bandwidth:  3.94 GB/s         | Speedup:  2.93x
- -> Nearest neighbor CPU omp     time:    8.52 ms        | Througput:  5.19 GB/s         | Bandwidth: 10.38 GB/s         | Speedup:  7.71x | comp_units: 16 Eff: 0.48
- -> Nearest neighbor CPU sse2    time:   14.89 ms        | Througput:  2.97 GB/s         | Bandwidth:  5.94 GB/s         | Speedup:  4.41x
