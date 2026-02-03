@@ -13,7 +13,7 @@
 #include <string.h>
 #include <vector>
 
-// Bilinear RGB
+// Bilinear RGB 
 void cpu_bil_v1(
     unsigned char* input,
     unsigned char* output,
@@ -21,27 +21,28 @@ void cpu_bil_v1(
     int new_width, int new_height,
     int channels
 ) {
-    float x_ratio = (float)(width - 1) / new_width;
-    float y_ratio = (float)(height - 1) / new_height;
+    float x_ratio = (float)width / new_width;
+    float y_ratio = (float)height / new_height;
 
     for (int j = 0; j < new_height; j++) {
         float gy = j * y_ratio;
-        int y = (int)gy;
-        float dy = gy - y;
-        int y1 = (y + 1 < height) ? y + 1 : y;
+        int y1 = (int)gy;
+        float dy = gy - y1;
+        int y2 = (y1 + 1 < height - 1) ? y1 + 1 : height - 1; // min
 
         for (int i = 0; i < new_width; i++) {
             float gx = i * x_ratio;
-            int x = (int)gx;
-            float dx = gx - x;
-            int x1 = (x + 1 < width) ? x + 1 : x;
+            int x1 = (int)gx;
+            float dx = gx - x1;
+            int x2 = (x1 + 1 < width - 1) ? x1 + 1  : width -1; // min
 
             for (int c = 0; c < channels; c++) {
-                unsigned char p00 = input[(y  * width + x ) * channels + c];
-                unsigned char p10 = input[(y  * width + x1) * channels + c];
-                unsigned char p01 = input[(y1 * width + x ) * channels + c];
-                unsigned char p11 = input[(y1 * width + x1) * channels + c];
+                unsigned char p00 = input[(y1  * width + x1 ) * channels + c];
+                unsigned char p10 = input[(y1  * width + x2) * channels + c];
+                unsigned char p01 = input[(y2 * width + x1 ) * channels + c];
+                unsigned char p11 = input[(y2 * width + x2) * channels + c];
 
+                //F(x,y)=(1−a)(1−b)F(i,j) + a(1−b)F(i+1,j) + (1−a)bF(i,j+1) + abF(i+1,j+1)
                 float value =
                     p00 * (1 - dx) * (1 - dy) +
                     p10 * dx       * (1 - dy) +
@@ -49,95 +50,94 @@ void cpu_bil_v1(
                     p11 * dx       * dy;
 
                 output[(j * new_width + i) * channels + c] =
-                    (unsigned char)(value + 0.5f); // arrotondamento
+                    (unsigned char)(value);
             }
         }
     }
 }
 
-#include <algorithm>
-#define FP_SHIFT 16
-#define FP_ONE (1 << FP_SHIFT)
-#define FP_HALF (1 << (FP_SHIFT - 1))
-#define LUT_SIZE 1024 // Risoluzione della frazione (10 bit)
-#define LUT_SHIFT (FP_SHIFT - 10) 
-
-// Tabella pre-calcolata (da inizializzare una volta con interi)
-int BIC_LUT_INT[2048]; // Copre l'intervallo [0, 2.0]
-
-void init_bicubic_lut_int() {
-    float a = -0.5f;
-    for (int i = 0; i < 2048; i++) {
-        float d = (float)i / 1024.0f; // d da 0 a 2
-        float w;
-        if (d <= 1.0f) w = (a + 2.0f)*(d*d*d) - (a + 3.0f)*(d*d) + 1.0f;
-        else if (d < 2.0f) w = a*(d*d*d) - 5.0f*a*(d*d) + 8.0f*a*d - 4.0f*a;
-        else w = 0.0f;
-        BIC_LUT_INT[i] = (int)(w * FP_ONE);
-    }
-}
-
-void cpu_bic_v2(
-    unsigned char* input, unsigned char* output,
+// Ottimizzazione con fixed-point e LUT per X  Q16.16 (scalare)
+void cpu_bil_v2(
+    unsigned char* input,
+    unsigned char* output,
     int width, int height,
     int new_width, int new_height,
     int channels
 ) {
-    // Rapporti di scala in Fixed-Point Q16.16
-    // Usiamo (width-1) per mappare esattamente l'ultimo pixel
-    int x_ratio = ((width - 1) << FP_SHIFT) / (new_width > 1 ? new_width - 1 : 1);
-    int y_ratio = ((height - 1) << FP_SHIFT) / (new_height > 1 ? new_height - 1 : 1);
+    const int FP_SHIFT = 16;
+    const int FP_ONE   = 1 << FP_SHIFT;
 
+    // Rapporti di scala
+    int x_ratio = ((width ) << FP_SHIFT) / new_width ;
+    int y_ratio = ((height) << FP_SHIFT) / new_height ;
+
+    // LUT X per evitare ricalcoli inutili nel loop interno
+    int* lut = (int*)_mm_malloc(new_width * 3 * sizeof(int), 16);
+    int* x0 = lut; //std::vector<int> x0(new_width);
+    int* x1 = lut + new_width; //std::vector<int> x1(new_width);
+    int* dx = lut + (new_width * 2); //std::vector<int> dx(new_width); 
+
+    for (int x = 0; x < new_width; x++) {
+        int gx = x * x_ratio;
+        x0[x] = gx >> FP_SHIFT;
+        dx[x] = gx & (FP_ONE - 1);                          //Q16.16
+        x1[x] = (x0[x] + 1 < width - 1) ? x0[x] + 1 : width - 1;
+        //std::min(x0[x] + 1, width - 1);
+    }
+
+    int64_t acc;
+    
     for (int y = 0; y < new_height; y++) {
-        // Coordinata Y in fixed-point
-        int curr_y = y * y_ratio; 
-        int iy = curr_y >> FP_SHIFT;
-        int fy = (curr_y & (FP_ONE - 1)); // Parte frazionaria
+        int gy = y * y_ratio;
+        int y0 = gy >> FP_SHIFT;
+        int dy = gy & (FP_ONE - 1);                         //Q16.16    
+        int y2 = (y0 + 1 < height - 1) ? y0 + 1 : height - 1;
+        //std::min(y0 + 1, height - 1);
 
-        // Pesi verticali (4 pixel intorno a iy)
-        int wy[4];
-        // fy >> LUT_SHIFT ci dà l'indice nella tabella
-        wy[0] = BIC_LUT_INT[(fy + FP_ONE) >> LUT_SHIFT]; // d = 1 + fract
-        wy[1] = BIC_LUT_INT[fy >> LUT_SHIFT];            // d = fract
-        wy[2] = BIC_LUT_INT[(FP_ONE - fy) >> LUT_SHIFT]; // d = 1 - fract
-        wy[3] = BIC_LUT_INT[(2 * FP_ONE - fy) >> LUT_SHIFT]; // d = 2 - fract
+        const unsigned char* row0 = input + y0 * width * channels;
+        const unsigned char* row1 = input + y2 * width * channels;
+        unsigned char* dst = output + y * new_width * channels;
+
+        int wy0 = FP_ONE - dy;
+        int wy2 = dy;
 
         for (int x = 0; x < new_width; x++) {
-            int curr_x = x * x_ratio;
-            int ix = curr_x >> FP_SHIFT;
-            int fx = (curr_x & (FP_ONE - 1));
+            int wx0 = FP_ONE - dx[x];
+            int wx1 = dx[x];
 
-            int wx[4];
-            wx[0] = BIC_LUT_INT[(fx + FP_ONE) >> LUT_SHIFT];
-            wx[1] = BIC_LUT_INT[fx >> LUT_SHIFT];
-            wx[2] = BIC_LUT_INT[(FP_ONE - fx) >> LUT_SHIFT];
-            wx[3] = BIC_LUT_INT[(2 * FP_ONE - fx) >> LUT_SHIFT];
+            // Pesi risultanti sono in Q32 (16+16)
+            // Usiamo int64_t per evitare overflow durante la somma
+            int64_t w00 = (int64_t)wx0 * wy0;
+            int64_t w10 = (int64_t)wx1 * wy0;
+            int64_t w01 = (int64_t)wx0 * wy2;
+            int64_t w11 = (int64_t)wx1 * wy2;
 
-            for (int c = 0; c < channels; c++) {
-                long long sum = 0; // Usiamo long long per evitare overflow nelle somme parziali
+            int i00 = x0[x] * channels;
+            int i10 = x1[x] * channels;
+            int o   = x * channels;
 
-                for (int m = -1; m <= 2; m++) {
-                    int sy = std::clamp(iy + m, 0, height - 1);
-                    int weight_y = wy[m + 1];
-
-                    for (int n = -1; n <= 2; n++) {
-                        int sx = std::clamp(ix + n, 0, width - 1);
-                        int weight_x = wx[n + 1];
-
-                        int pixel = input[(sy * width + sx) * channels + c];
-                        
-                        // Combinazione pesi: (W1 * W2) >> FP_SHIFT
-                        int combined_w = (int)(((long long)weight_y * weight_x) >> FP_SHIFT);
-                        sum += (long long)pixel * combined_w;
-                    }
-                }
-
-                // Risultato finale: normalizzazione e arrotondamento
-                int res = (int)((sum + FP_HALF) >> FP_SHIFT);
-                output[(y * new_width + x) * channels + c] = (unsigned char)std::clamp(res, 0, 255);
-            }
+                // Calcolo pesato: (Valore * Peso)          //pixel(8 bit) * peso(Q32) = Q40
+                int64_t acc = (int64_t)row0[i00 + 0] * w00 +
+                              (int64_t)row0[i10 + 0] * w10 +
+                              (int64_t)row1[i00 + 0] * w01 +
+                              (int64_t)row1[i10 + 0] * w11;
+                // Shift di 32 per tornare da Q32.32 a intero
+                dst[o + 0] = (unsigned char)(acc >> 32); //troncamento
+                        acc = (int64_t)row0[i00 + 1] * w00 +
+                              (int64_t)row0[i10 + 1] * w10 +
+                              (int64_t)row1[i00 + 1] * w01 +
+                              (int64_t)row1[i10 + 1] * w11;
+                // Shift di 32 per tornare da Q32.32 a intero
+                dst[o + 1] = (unsigned char)(acc >> 32); //troncamento
+                        acc = (int64_t)row0[i00 + 2] * w00 +
+                              (int64_t)row0[i10 + 2] * w10 +
+                              (int64_t)row1[i00 + 2] * w01 +
+                              (int64_t)row1[i10 + 2] * w11;
+                // Shift di 32 per tornare da Q32.32 a intero
+                dst[o + 2] = (unsigned char)(acc >> 32); //troncamento
         }
     }
+    _mm_free(lut);
 }
 
 void cpu_bil_omp(
@@ -149,39 +149,38 @@ void cpu_bil_omp(
 ) {
     const int FP_SHIFT = 16;
     const int FP_ONE   = 1 << FP_SHIFT;
-    const int FP_HALF  = 1 << (31); // Per arrotondamento nel finale Q32
 
     // Rapporti di scala
-    int x_ratio = ((width - 1) << FP_SHIFT) / new_width ;
-    int y_ratio = ((height - 1) << FP_SHIFT) / new_height ;
+    int x_ratio = ((width ) << FP_SHIFT) / new_width ;
+    int y_ratio = ((height) << FP_SHIFT) / new_height ;
 
     // LUT X per evitare ricalcoli inutili nel loop interno
-    std::vector<int> x0(new_width), x1(new_width),dx(new_width);  
-    //int* x0 = (int*)malloc(new_width * sizeof(int));
-    //int* x1 = (int*)malloc(new_width * sizeof(int));
-    //int* dx = (int*)malloc(new_width * sizeof(int));
+    int* lut = (int*)_mm_malloc(new_width * 3 * sizeof(int), 16);
+    int* x0 = lut; //std::vector<int> x0(new_width);
+    int* x1 = lut + new_width; //std::vector<int> x1(new_width);
+    int* dx = lut + (new_width * 2); //std::vector<int> dx(new_width); 
 
     for (int x = 0; x < new_width; x++) {
         int gx = x * x_ratio;
         x0[x] = gx >> FP_SHIFT;
-        dx[x] = gx & (FP_ONE - 1);
-        x1[x] = (x0[x] + 1 < width) ? x0[x] + 1 : x0[x];
+        dx[x] = gx & (FP_ONE - 1);                          //Q16.16
+        x1[x] = (x0[x] + 1 < width - 1) ? x0[x] + 1 : width - 1;
+        //std::min(x0[x] + 1, width - 1);
     }
-
-    // Parallelizzazione sulle righe (y)
     #pragma omp parallel for
     for (int y = 0; y < new_height; y++) {
         int gy = y * y_ratio;
         int y0 = gy >> FP_SHIFT;
-        int dy = gy & (FP_ONE - 1);
-        int y1 = (y0 + 1 < height) ? y0 + 1 : y0;
+        int dy = gy & (FP_ONE - 1);                         //Q16.16    
+        int y2 = (y0 + 1 < height - 1) ? y0 + 1 : height - 1;
+        //std::min(y0 + 1, height - 1);
 
         const unsigned char* row0 = input + y0 * width * channels;
-        const unsigned char* row1 = input + y1 * width * channels;
+        const unsigned char* row1 = input + y2 * width * channels;
         unsigned char* dst = output + y * new_width * channels;
 
         int wy0 = FP_ONE - dy;
-        int wy1 = dy;
+        int wy2 = dy;
 
         for (int x = 0; x < new_width; x++) {
             int wx0 = FP_ONE - dx[x];
@@ -191,31 +190,34 @@ void cpu_bil_omp(
             // Usiamo int64_t per evitare overflow durante la somma
             int64_t w00 = (int64_t)wx0 * wy0;
             int64_t w10 = (int64_t)wx1 * wy0;
-            int64_t w01 = (int64_t)wx0 * wy1;
-            int64_t w11 = (int64_t)wx1 * wy1;
+            int64_t w01 = (int64_t)wx0 * wy2;
+            int64_t w11 = (int64_t)wx1 * wy2;
 
             int i00 = x0[x] * channels;
             int i10 = x1[x] * channels;
             int o   = x * channels;
 
-            for (int c = 0; c < channels; c++) {
-                // Calcolo pesato: (Valore * Peso)
-                int64_t acc = (int64_t)row0[i00 + c] * w00 +
-                              (int64_t)row0[i10 + c] * w10 +
-                              (int64_t)row1[i00 + c] * w01 +
-                              (int64_t)row1[i10 + c] * w11;
-
+           int64_t acc = (int64_t)row0[i00 + 0] * w00 +
+                              (int64_t)row0[i10 + 0] * w10 +
+                              (int64_t)row1[i00 + 0] * w01 +
+                              (int64_t)row1[i10 + 0] * w11;
                 // Shift di 32 per tornare da Q32.32 a intero
-                // Aggiungiamo (1LL << 31) per un arrotondamento corretto invece del troncamento
-                dst[o + c] = (unsigned char)((acc + (1LL << 31)) >> 32);
-            }
+            dst[o + 0] = (unsigned char)(acc >> 32); //troncamento
+                    acc = (int64_t)row0[i00 + 1] * w00 +
+                            (int64_t)row0[i10 + 1] * w10 +
+                            (int64_t)row1[i00 + 1] * w01 +
+                            (int64_t)row1[i10 + 1] * w11;
+            // Shift di 32 per tornare da Q32.32 a intero
+            dst[o + 1] = (unsigned char)(acc >> 32); //troncamento
+                    acc = (int64_t)row0[i00 + 2] * w00 +
+                            (int64_t)row0[i10 + 2] * w10 +
+                            (int64_t)row1[i00 + 2] * w01 +
+                            (int64_t)row1[i10 + 2] * w11;
+            // Shift di 32 per tornare da Q32.32 a intero
+            dst[o + 2] = (unsigned char)(acc >> 32); //troncamento
         }
     }
-    /* 
-    free(x0);
-    free(x1);
-    free(dx);
-    */
+    _mm_free(lut);
 }
 
 // Bilinear RGB con OpenMP e ottimizzazioni fixed-point e LUT  Q8.8 (SIMD auto)
@@ -227,157 +229,78 @@ void cpu_bil_omp_v2(
 ) {
     if (channels != 3) return; // Ottimizziamo specificamente per RGB
 
-    const int FP_SHIFT = 8; // Passiamo a 8 bit per i pesi per massimizzare SIMD auto
+    const int FP_SHIFT = 8; // Passiamo a 8 bit per i pesi
     const int FP_ONE = 1 << FP_SHIFT;
 
-    int x_ratio = ((width - 1) << 16) / new_width;
-    int y_ratio = ((height - 1) << 16) / new_height;
+    int x_ratio = ((width ) << 16) / (new_width );
+    int y_ratio = ((height ) << 16) / (new_height);
+    
+    int* lut = (int*)_mm_malloc(new_width * 3 * sizeof(int), 16);
+    int* x0 = lut; //std::vector<int> x0(new_width);
+    int* x1 = lut + new_width; //std::vector<int> x1(new_width);
+    int* dx = lut + (new_width * 2); //std::vector<int> dx(new_width); 
 
-    std::vector<int> x0(new_width), x1(new_width), dx(new_width);
     for (int x = 0; x < new_width; x++) {
-        int gx = x * x_ratio;
-        x0[x] = (gx >> 16) * 3;
-        x1[x] = ((gx >> 16) + 1 < width) ? x0[x] + 3 : x0[x];
-        dx[x] = (gx & 0xFFFF) >> 8; // Peso orizzontale 0-255
+
+        int gx = x * x_ratio; // 16.16 
+        int ix = gx >> 16; // indice pixel 0..width-1 
+        int ix1 = (ix + 1 < width - 1) ? ix + 1 : width - 1; 
+
+        x0[x] = ix * 3; // indice byte per RGB 
+        x1[x] = ix1 * 3; // indice byte per RGB 
+        dx[x] = (gx & 0xFFFF) >> 8; // peso orizzontale 0..255
     }
 
-    #pragma omp parallel for schedule(static)
+    #pragma omp parallel for 
     for (int y = 0; y < new_height; y++) {
         int gy = y * y_ratio;
         int y0 = gy >> 16;
         int dy = (gy & 0xFFFF) >> 8; // Peso verticale 0-255
-        int y1 = (y0 + 1 < height) ? y0 + 1 : y0;
+        int y2 = (y0 + 1 < height - 1) ? y0 + 1 : height - 1; 
 
         const unsigned char* r0 = input + y0 * width * 3;
-        const unsigned char* r1 = input + y1 * width * 3;
+        const unsigned char* r1 = input + y2 * width * 3;
         unsigned char* dst = output + y * new_width * 3;
 
-        int wy1 = dy;
-        int wy0 = 256 - dy;
+        int32_t wy0 = 256 - dy;
+        int32_t wy2 = dy;
 
         for (int x = 0; x < new_width; x++) {
-            int wx1 = dx[x];
-            int wx0 = 256 - wx1;
-
+            int32_t wx1 = dx[x];                    //0..255
+            int32_t wx0 = 256 - wx1;
+        
             int i0 = x0[x];
             int i1 = x1[x];
+            int o = x * channels;
 
             // Calcoliamo R, G, B separatamente ma senza loop.
-            // Usiamo int32_t: il compilatore userà istruzioni SIMD a 32-bit (4 o 8 pixel alla volta)
-            for (int c = 0; c < channels; c++) {
-                // Interpolazione orizzontale (riga 0 e riga 1)
-                int h0 = (r0[i0 + c] * wx0 + r0[i1 + c] * wx1) >> 8;
-                int h1 = (r1[i0 + c] * wx0 + r1[i1 + c] * wx1) >> 8;
+            // Unrolling del loop sui 3 canali (R,G,B) 
+            // Interpolazione orizzontale (riga 0 e riga 1)
 
-                // Interpolazione verticale
-                dst[x * channels + c] = (unsigned char)((h0 * wy0 + h1 * wy1) >> 8);
-            }
+            int32_t h0_0 = (r0[i0 + 0] * wx0 + r0[i1 + 0] * wx1) >> 8; 
+            int32_t h1_0 = (r1[i0 + 0] * wx0 + r1[i1 + 0] * wx1) >> 8; 
+            dst[o + 0] = (unsigned char)((h0_0 * wy0 + h1_0 * wy2) >> 8);
+
+            int32_t h0_1 = (r0[i0 + 1] * wx0 + r0[i1 + 1] * wx1) >> 8; 
+            int32_t h1_1 = (r1[i0 + 1] * wx0 + r1[i1 + 1] * wx1) >> 8; 
+            dst[o + 1] = (unsigned char)((h0_1 * wy0 + h1_1 * wy2) >> 8);
+            
+            int32_t h0_2 = (r0[i0 + 2] * wx0 + r0[i1 + 2] * wx1) >> 8; 
+            int32_t h1_2 = (r1[i0 + 2] * wx0 + r1[i1 + 2] * wx1) >> 8; 
+            dst[o + 2] = (unsigned char)((h0_2 * wy0 + h1_2 * wy2) >> 8);
         }
     }
+    _mm_free(lut);
 }
-
-
-void cpu_bil_omp_v3(
-    unsigned char* input,
-    unsigned char* output,
-    int width, int height,
-    int new_width, int new_height,
-    int channels
-) {
-    if (channels != 3) return;
-
-    const int FP_SHIFT = 16;
-    const int FP_ONE   = 1 << FP_SHIFT;
-
-    int x_ratio = ((width  - 1) << FP_SHIFT) / new_width;
-    int y_ratio = ((height - 1) << FP_SHIFT) / new_height;
-
-    // LUT X (Q8.8)
-    std::vector<int> x0(new_width), x1(new_width), dx(new_width);
-    for (int x = 0; x < new_width; x++) {
-        int gx = x * x_ratio;
-        x0[x] = gx >> FP_SHIFT;
-        dx[x] = (gx & (FP_ONE - 1)) >> 8;   // Q8.8
-        x1[x] = (x0[x] + 1 < width) ? x0[x] + 1 : x0[x];
-    }
-
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < new_height; y++) {
-        int gy = y * y_ratio;
-        int y0 = gy >> FP_SHIFT;
-        int dy = (gy & (FP_ONE - 1)) >> 8;  // Q8.8
-        int y1 = (y0 + 1 < height) ? y0 + 1 : y0;
-
-        unsigned char* r0 = input + y0 * width * 3;
-        unsigned char* r1 = input + y1 * width * 3;
-        unsigned char* dst = output + y * new_width * 3;
-
-        int wy0 = 256 - dy;
-        int wy1 = dy;
-
-        for (int x = 0; x < new_width; x++) {
-            int wx0 = 256 - dx[x];
-            int wx1 = dx[x];
-
-            int i00 = x0[x] * 3;
-            int i10 = x1[x] * 3;
-
-            // RGB
-            for (int c = 0; c < 3; c++) {
-                // lerp orizzontale (Q8.8 → Q16)
-                int h0 =
-                    r0[i00 + c] * wx0 +
-                    r0[i10 + c] * wx1;
-
-                int h1 =
-                    r1[i00 + c] * wx0 +
-                    r1[i10 + c] * wx1;
-
-                h0 >>= 8;
-                h1 >>= 8;
-
-                // lerp verticale (Q8.8 → Q16)
-                int v =
-                    h0 * wy0 +
-                    h1 * wy1;
-
-                dst[x * 3 + c] = (unsigned char)(v >> 8);
-            }
-        }
-    }
-}
-
-
 
 #include <emmintrin.h>
 #include <immintrin.h>
 
-template<typename T>
-inline __m128i load_pixel_rgb_sse(const T* row, int idx, int safe_limit) {
-    if (idx <= safe_limit) {
-        // Caricamento veloce a 32-bit (4 byte)
-        return _mm_cvtsi32_si128(*(const int*)&row[idx]);
-    } else {
-        // Caricamento sicuro byte per byte per il bordo destro
-        unsigned int tmp = 0;
-        tmp |= (unsigned int)row[idx];
-        tmp |= ((unsigned int)row[idx + 1] << 8);
-        tmp |= ((unsigned int)row[idx + 2] << 16);
-        return _mm_cvtsi32_si128(tmp);
-    }
-}
-
-// Utilizziamo l'allineamento 
-template <typename T, size_t Alignment> 
-T *aligned_malloc(const size_t size) {
-    void *ptr = _mm_malloc(size * sizeof(T), Alignment);
-    if (ptr == nullptr) throw std::bad_alloc();
-    return static_cast<T *>(ptr);
-}
 
 /*
 Elabora 1 pixel alla volta. Usa i registri SSE2 solo per parallelizzare i canali R, G, B dello stesso pixel. 
-È un miglioramento rispetto al codice scalare, ma lascia i registri SSE2 per metà inutilizzati (usa solo 3-6 byte su 16 disponibili).*/
+È un miglioramento rispetto al codice scalare, ma lascia i registri SSE2 per metà inutilizzati (usa solo 3-6 byte su 16 disponibili).
+*/
 
 void cpu_bil_sse2(
     unsigned char* input,
@@ -388,85 +311,273 @@ void cpu_bil_sse2(
 ) {
     const int FP_SHIFT = 16;
     const int FP_ONE   = 1 << FP_SHIFT;
+    const int WEIGHT_ONE = 1 << 8;
 
-    int x_ratio = ((width - 1)  << FP_SHIFT) / new_width ;
-    int y_ratio = ((height - 1) << FP_SHIFT) / new_height;
+    int x_ratio = ((width )  << FP_SHIFT) / new_width ;
+    int y_ratio = ((height) << FP_SHIFT) / new_height;
 
-    std::vector<int> x0(new_width), x1(new_width), dx(new_width);
+    int* lut = (int*)_mm_malloc(new_width * 3 * sizeof(int), 16);
+    int* x0 = lut; //std::vector<int> x0(new_width);
+    int* x1 = lut + new_width; //std::vector<int> x1
+    int* dx = lut + (new_width * 2); //std::vector<int> dx(new_width);
 
     for (int x = 0; x < new_width; x++) {
         int gx = x * x_ratio;
         x0[x] = gx >> FP_SHIFT;
-        dx[x] = gx & (FP_ONE - 1);
+        dx[x] = (gx & (0xFFFF) >> 8);
         x1[x] = (x0[x] + 1 < width) ? x0[x] + 1 : x0[x];
     }
 
-    const int safe_limit = width * channels - 4; // Per caricamenti sicuri
+    const __m128i mask_ff = _mm_set1_epi32(0x000000FF); // to isolate a byte in each dword
     const __m128i zero = _mm_setzero_si128();
 
     for (int y = 0; y < new_height; y++) {
         int gy = y * y_ratio;
         int y0 = gy >> FP_SHIFT;
-        int dy = (gy & (FP_ONE - 1)) >> 8; // Riduciamo a 8 bit per stare in 16 bit totali (SIMD)
-        int y1 = (y0 + 1 < height) ? y0 + 1 : y0;
+        int dy = (gy & (0xFFFF)) >> 8; // Riduciamo a 8 bit per stare in 16 bit totali (SIMD)
+        int y2 = (y0 + 1 < height - 1) ? y0 + 1 : height - 1;
 
         unsigned char* row0 = input + y0 * width * channels;
-        unsigned char* row1 = input + y1 * width * channels;
-        unsigned char* dst_row = output + y * new_width * channels;
+        unsigned char* row1 = input + y2 * width * channels;
+        unsigned char* dst = output + y * new_width * channels;
 
         // Peso verticale in 16 bit (Q8.8)
-        __m128i v_wy1 = _mm_set1_epi16((short)dy);
-        __m128i v_wy0 = _mm_set1_epi16((short)(256 - dy));
+        int32_t v_wy2 = dy;
+        int32_t v_wy0 = (256 - dy);
+        int x=0;
+        // process 4 pixels per iteration
+        for (; x < new_width - 4; x+= 4) {
+            // indices (pixel indices) 
+            int ix0   = x0[x]; 
+            int ix0_1 = x1[x]; 
+            int ix1   = x0[x+1]; 
+            int ix1_1 = x1[x+1]; 
+            int ix2   = x0[x+2]; 
+            int ix2_1 = x1[x+2]; 
+            int ix3   = x0[x+3]; 
+            int ix3_1 = x1[x+3];
 
-        for (int x = 0; x < new_width; x++) {
-            int cur_dx = dx[x] >> 8; // Ridotto a 8 bit
-            __m128i v_wx1 = _mm_set1_epi16((short)cur_dx);
-            __m128i v_wx0 = _mm_set1_epi16((short)(256 - cur_dx));
+            // dx weights for 4 pixels 
+            int wx0_0 = WEIGHT_ONE - dx[x]; 
+            int wx1_0 = dx[x]; 
+            int wx0_1 = WEIGHT_ONE - dx[x+1]; 
+            int wx1_1 = dx[x+1]; 
+            int wx0_2 = WEIGHT_ONE - dx[x+2]; 
+            int wx1_2 = dx[x+2]; 
+            int wx0_3 = WEIGHT_ONE - dx[x+3]; 
+            int wx1_3 = dx[x+3];
 
-            int i0 = x0[x] * channels;
-            int i1 = x1[x] * channels;
+            
+            // Load 4 source pixels for top row (p00,p10 for each target) 
+            // We need top-left and top-right for each of the 4 targets. 
+            // We'll build two __m128i: top_left = [p3,p2,p1,p0], top_right = [q3,q2,q1,q0] 
+            /*************************************************************** */
+            // load 32-bit words (RGB + spare byte) from top row
+            uint32_t tl0 = *(const uint32_t*)(row0 + (size_t)ix0   * channels);
+            uint32_t tr0 = *(const uint32_t*)(row0 + (size_t)ix0_1 * channels);
+            uint32_t tl1 = *(const uint32_t*)(row0 + (size_t)ix1   * channels);
+            uint32_t tr1 = *(const uint32_t*)(row0 + (size_t)ix1_1 * channels);
+            uint32_t tl2 = *(const uint32_t*)(row0 + (size_t)ix2   * channels);
+            uint32_t tr2 = *(const uint32_t*)(row0 + (size_t)ix2_1 * channels);
+            uint32_t tl3 = *(const uint32_t*)(row0 + (size_t)ix3   * channels);
+            uint32_t tr3 = *(const uint32_t*)(row0 + (size_t)ix3_1 * channels);
 
-                // Carichiamo i 4 pixel sorgenti (3 byte ciascuno)
-                // Usiamo una tecnica per caricare RGB in registri SIMD
-                // Carichiamo 4 byte ma ne usiamo solo 3
-                // usiamo il template per il caricamento sicuro
-                __m128i p00 = load_pixel_rgb_sse(row0, i0 , safe_limit);
-                __m128i p10 = load_pixel_rgb_sse(row0, i1 , safe_limit);
-                __m128i p01 = load_pixel_rgb_sse(row1, i0 , safe_limit);
-                __m128i p11 = load_pixel_rgb_sse(row1, i1, safe_limit);
+            // bottom row
+            uint32_t bl0 = *(const uint32_t*)(row1 + (size_t)ix0   * channels);
+            uint32_t br0 = *(const uint32_t*)(row1 + (size_t)ix0_1 * channels);
+            uint32_t bl1 = *(const uint32_t*)(row1 + (size_t)ix1   * channels);
+            uint32_t br1 = *(const uint32_t*)(row1 + (size_t)ix1_1 * channels);
+            uint32_t bl2 = *(const uint32_t*)(row1 + (size_t)ix2   * channels);
+            uint32_t br2 = *(const uint32_t*)(row1 + (size_t)ix2_1 * channels);
+            uint32_t bl3 = *(const uint32_t*)(row1 + (size_t)ix3   * channels);
+            uint32_t br3 = *(const uint32_t*)(row1 + (size_t)ix3_1 * channels);
 
-                // Unpack a 16 bit
-                __m128i p00_16 = _mm_unpacklo_epi8(p00, zero);
-                __m128i p10_16 = _mm_unpacklo_epi8(p10, zero);
-                __m128i p01_16 = _mm_unpacklo_epi8(p01, zero);
-                __m128i p11_16 = _mm_unpacklo_epi8(p11, zero);
+            // extract bytes and horizontal interpolation scalar for 4 pixels 
+            uint8_t out_r[4], out_g[4], out_b[4];
+            // pixel 0 
+            { 
+                uint8_t tl_r = (uint8_t)(tl0 & 0xFF), tl_g = (uint8_t)((tl0 >> 8) & 0xFF), tl_b = (uint8_t)((tl0 >> 16) & 0xFF); 
+                uint8_t tr_r = (uint8_t)(tr0 & 0xFF), tr_g = (uint8_t)((tr0 >> 8) & 0xFF), tr_b = (uint8_t)((tr0 >> 16) & 0xFF); 
+                uint8_t bl_r = (uint8_t)(bl0 & 0xFF), bl_g = (uint8_t)((bl0 >> 8) & 0xFF), bl_b = (uint8_t)((bl0 >> 16) & 0xFF); 
+                uint8_t br_r = (uint8_t)(br0 & 0xFF), br_g = (uint8_t)((br0 >> 8) & 0xFF), br_b = (uint8_t)((br0 >> 16) & 0xFF); 
+                int h0r = (tl_r * wx0_0 + tr_r * wx1_0) >> 8; int h1r = (bl_r * wx0_0 + br_r * wx1_0) >> 8; 
+                int vr = (h0r * v_wy0 + h1r * v_wy2) >> 8; int h0g = (tl_g * wx0_0 + tr_g * wx1_0) >> 8; 
+                int h1g = (bl_g * wx0_0 + br_g * wx1_0) >> 8; int vg = (h0g * v_wy0 + h1g * v_wy2) >> 8; 
+                int h0b = (tl_b * wx0_0 + tr_b * wx1_0) >> 8; int h1b = (bl_b * wx0_0 + br_b * wx1_0) >> 8; 
+                int vb = (h0b * v_wy0 + h1b * v_wy2) >> 8; out_r[0] = (uint8_t)(vr < 0 ? 0 : (vr > 255 ? 255 : vr)); 
+                out_g[0] = (uint8_t)(vg < 0 ? 0 : (vg > 255 ? 255 : vg)); out_b[0] = (uint8_t)(vb < 0 ? 0 : (vb > 255 ? 255 : vb)); 
+            }
 
-                // Interpolazione orizzontale: (p00 * wx0 + p10 * wx1) >> 8
-                __m128i h0 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(p00_16, v_wx0), _mm_mullo_epi16(p10_16, v_wx1)), 8);
-                __m128i h1 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(p01_16, v_wx0), _mm_mullo_epi16(p11_16, v_wx1)), 8);
+            // pixel 1 
+            { 
+                uint8_t tl_r = (uint8_t)(tl1 & 0xFF), tl_g = (uint8_t)((tl1 >> 8) & 0xFF), tl_b = (uint8_t)((tl1 >> 16) & 0xFF); 
+                uint8_t tr_r = (uint8_t)(tr1 & 0xFF), tr_g = (uint8_t)((tr1 >> 8) & 0xFF), tr_b = (uint8_t)((tr1 >> 16) & 0xFF); 
+                uint8_t bl_r = (uint8_t)(bl1 & 0xFF), bl_g = (uint8_t)((bl1 >> 8) & 0xFF), bl_b = (uint8_t)((bl1 >> 16) & 0xFF); 
+                uint8_t br_r = (uint8_t)(br1 & 0xFF), br_g = (uint8_t)((br1 >> 8) & 0xFF), br_b = (uint8_t)((br1 >> 16) & 0xFF); 
+                int h0r = (tl_r * wx0_1 + tr_r * wx1_1) >> 8; int h1r = (bl_r * wx0_1 + br_r * wx1_1) >> 8; 
+                int vr = (h0r * v_wy0 + h1r * v_wy2) >> 8; int h0g = (tl_g * wx0_1 + tr_g * wx1_1) >> 8; 
+                int h1g = (bl_g * wx0_1 + br_g * wx1_1) >> 8; int vg = (h0g * v_wy0 + h1g * v_wy2) >> 8; 
+                int h0b = (tl_b * wx0_1 + tr_b * wx1_1) >> 8; int h1b = (bl_b * wx0_1 + br_b * wx1_1) >> 8; 
+                int vb = (h0b * v_wy0 + h1b * v_wy2) >> 8; out_r[1] = (uint8_t)(vr < 0 ? 0 : (vr > 255 ? 255 : vr)); 
+                out_g[1] = (uint8_t)(vg < 0 ? 0 : (vg > 255 ? 255 : vg)); out_b[1] = (uint8_t)(vb < 0 ? 0 : (vb > 255 ? 255 : vb)); 
+            }
+            // pixel 2 
+            { 
+                uint8_t tl_r = (uint8_t)(tl2 & 0xFF), tl_g = (uint8_t)((tl2 >> 8) & 0xFF), tl_b = (uint8_t)((tl2 >> 16) & 0xFF); 
+                uint8_t tr_r = (uint8_t)(tr2 & 0xFF), tr_g = (uint8_t)((tr2 >> 8) & 0xFF), tr_b = (uint8_t)((tr2 >> 16) & 0xFF); 
+                uint8_t bl_r = (uint8_t)(bl2 & 0xFF), bl_g = (uint8_t)((bl2 >> 8) & 0xFF), bl_b = (uint8_t)((bl2 >> 16) & 0xFF); 
+                uint8_t br_r = (uint8_t)(br2 & 0xFF), br_g = (uint8_t)((br2 >> 8) & 0xFF), br_b = (uint8_t)((br2 >> 16) & 0xFF); 
+                int h0r = (tl_r * wx0_2 + tr_r * wx1_2) >> 8; 
+                int h1r = (bl_r * wx0_2 + br_r * wx1_2) >> 8; 
+                int vr = (h0r * v_wy0 + h1r * v_wy2) >> 8; 
+                int h0g = (tl_g * wx0_2 + tr_g * wx1_2) >> 8; 
+                int h1g = (bl_g * wx0_2 + br_g * wx1_2) >> 8; 
+                int vg = (h0g * v_wy0 + h1g * v_wy2) >> 8; 
+                int h0b = (tl_b * wx0_2 + tr_b * wx1_2) >> 8; 
+                int h1b = (bl_b * wx0_2 + br_b * wx1_2) >> 8; 
+                int vb = (h0b * v_wy0 + h1b * v_wy2) >> 8; 
+                out_r[2] = (uint8_t)(vr < 0 ? 0 : (vr > 255 ? 255 : vr)); 
+                out_g[2] = (uint8_t)(vg < 0 ? 0 : (vg > 255 ? 255 : vg)); 
+                out_b[2] = (uint8_t)(vb < 0 ? 0 : (vb > 255 ? 255 : vb)); 
+            }
+            // pixel 3 
+            { 
+                uint8_t tl_r = (uint8_t)(tl3 & 0xFF), tl_g = (uint8_t)((tl3 >> 8) & 0xFF), tl_b = (uint8_t)((tl3 >> 16) & 0xFF); 
+                uint8_t tr_r = (uint8_t)(tr3 & 0xFF), tr_g = (uint8_t)((tr3 >> 8) & 0xFF), tr_b = (uint8_t)((tr3 >> 16) & 0xFF); 
+                uint8_t bl_r = (uint8_t)(bl3 & 0xFF), bl_g = (uint8_t)((bl3 >> 8) & 0xFF), bl_b = (uint8_t)((bl3 >> 16) & 0xFF); 
+                uint8_t br_r = (uint8_t)(br3 & 0xFF), br_g = (uint8_t)((br3 >> 8) & 0xFF), br_b = (uint8_t)((br3 >> 16) & 0xFF); 
 
-                // Interpolazione verticale: (h0 * wy0 + h1 * wy1) >> 8
-                __m128i res_16 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy1)), 8);
+                int h0r = (tl_r * wx0_3 + tr_r * wx1_3) >> 8; 
+                int h1r = (bl_r * wx0_3 + br_r * wx1_3) >> 8; 
+                int vr = (h0r * v_wy0 + h1r * v_wy2) >> 8; 
+                int h0g = (tl_g * wx0_3 + tr_g * wx1_3) >> 8; 
+                int h1g = (bl_g * wx0_3 + br_g * wx1_3) >> 8; 
+                int vg = (h0g * v_wy0 + h1g * v_wy2) >> 8; 
+                int h0b = (tl_b * wx0_3 + tr_b * wx1_3) >> 8; 
+                int h1b = (bl_b * wx0_3 + br_b * wx1_3) >> 8; 
+                int vb = (h0b * v_wy0 + h1b * v_wy2) >> 8; 
+                out_r[3] = (uint8_t)(vr < 0 ? 0 : (vr > 255 ? 255 : vr)); 
+                out_g[3] = (uint8_t)(vg < 0 ? 0 : (vg > 255 ? 255 : vg)); 
+                out_b[3] = (uint8_t)(vb < 0 ? 0 : (vb > 255 ? 255 : vb)); 
+            }
+            // build 16-byte vector: bytes e0..e15 = [p0.r,p0.g,p0.b,p1.r,p1.g,p1.b,p2.r,p2.g,p2.b,p3.r,p3.g,p3.b,pad,pad,pad,pad] 
+            __m128i outv = _mm_set_epi8( 0,0,0,0, // e15..e12 padding 
+                (char)out_b[3], (char)out_g[3], (char)out_r[3], // e11..e9 
+                (char)out_b[2], (char)out_g[2], (char)out_r[2], // e8..e6 
+                (char)out_b[1], (char)out_g[1], (char)out_r[1], // e5..e3 
+                (char)out_b[0], (char)out_g[0], (char)out_r[0] // e2..e0
+            );
+            // store 16 bytes (we only filled 12, remaining 4 bytes can be left as-is)
+            // Use unaligned store to avoid alignment requirements 
+            _mm_storeu_si128((__m128i*)(dst + x * 3), outv); 
+        } 
+        // tail 
+        for (; x < new_width; ++x) { 
+            int ix = x0[x]; 
+            int ix1 = x1[x]; 
+            int wx1 = dx[x]; 
+            int wx0 = WEIGHT_ONE - wx1; 
+            // top 
+            const unsigned char* p00 = row0 + (size_t)ix * channels; 
+            const unsigned char* p10 = row0 + (size_t)ix1 * channels; 
+            const unsigned char* p01 = row1 + (size_t)ix * channels; 
+            const unsigned char* p11 = row1 + (size_t)ix1 * channels; 
+            for (int c = 0; c < 3; ++c) { 
+                int h0 = (p00[c] * wx0 + p10[c] * wx1) >> 8; 
+                int h1 = (p01[c] * wx0 + p11[c] * wx1) >> 8; 
+                int val = (h0 * v_wy0 + h1 * v_wy2) >> 8; if (val < 0) val = 0; 
+                else if (val > 255) val = 255; 
+                dst[x*3 + c] = (unsigned char)val; 
+            }
+        }
+    }
+    _mm_free(lut);
+}
 
-                // Riconvertiamo in 8-bit
-                __m128i res_8 = _mm_packus_epi16(res_16, res_16);
 
-                // Salvataggio dei 3 byte (RGB)
-                int final_pixel = _mm_cvtsi128_si32(res_8);
-                unsigned char* d = &dst_row[x * 3];
-                d[0] = (unsigned char)(final_pixel & 0xFF);
-                d[1] = (unsigned char)((final_pixel >> 8) & 0xFF);
-                d[2] = (unsigned char)((final_pixel >> 16) & 0xFF);;
+#define FP_SHIFT 8
+#define FP_SCALE (1 << FP_SHIFT)
+
+void cpu_bil_sse2_v2(
+    unsigned char* image,
+    unsigned char* resized,
+    int width, int height,
+    int new_width, int new_height,
+    int channels
+){ 
+    float scale_x = (float)(width - 1) / new_width;
+    float scale_y = (float)(height - 1) / new_height;
+
+    // 1. Pre-calcolo delle tabelle X (Orizzontali)
+    // Anche questo può essere parallelizzato
+    std::vector<int> x0_table(new_width);
+    std::vector<int> x1_table(new_width);
+    std::vector<int16_t> wx0_table(new_width);
+    std::vector<int16_t> wx1_table(new_width);
+
+    #pragma omp parallel for num_threads(16)
+    for (int x = 0; x < new_width; ++x) {
+        float fx = x * scale_x;
+        x0_table[x] = (int)fx;
+        x1_table[x] = (x0_table[x] + 1 < width) ? x0_table[x] + 1 : x0_table[x];
+        float weight = fx - x0_table[x];
+        wx1_table[x] = (int16_t)(weight * 256.0f);
+        wx0_table[x] = 256 - wx1_table[x];
+    }
+
+    // 2. Loop principale
+    for (int y = 0; y < new_height; ++y) {
+        float fy = y * scale_y;
+        int y0 = (int)fy;
+        int y1 = (y0 + 1 < height) ? y0 + 1 : y0;
+        
+        int wy1_val = (int)((fy - y0) * 256.0f);
+        int wy0_val = 256 - wy1_val;
+
+        __m128i v_wy0 = _mm_set1_epi16((short)wy0_val);
+        __m128i v_wy1 = _mm_set1_epi16((short)wy1_val);
+
+        const uint8_t* row0_ptr = &image[y0 * width * channels];
+        const uint8_t* row1_ptr = &image[y1 * width * channels];
+        uint8_t* dst_row = &resized[y * new_width * channels];
+
+        for (int x = 0; x < new_width; ++x) {
+            int x0 = x0_table[x] * channels;
+            int x1 = x1_table[x] * channels;
+            
+            __m128i v_wx0 = _mm_set1_epi16(wx0_table[x]);
+            __m128i v_wx1 = _mm_set1_epi16(wx1_table[x]);
+
+            // Caricamento pixel ottimizzato (RGB)
+            __m128i p00 = _mm_unpacklo_epi8(_mm_cvtsi32_si128(*(int*)&row0_ptr[x0]), _mm_setzero_si128());
+            __m128i p10 = _mm_unpacklo_epi8(_mm_cvtsi32_si128(*(int*)&row0_ptr[x1]), _mm_setzero_si128());
+            __m128i p01 = _mm_unpacklo_epi8(_mm_cvtsi32_si128(*(int*)&row1_ptr[x0]), _mm_setzero_si128());
+            __m128i p11 = _mm_unpacklo_epi8(_mm_cvtsi32_si128(*(int*)&row1_ptr[x1]), _mm_setzero_si128());
+
+            // Interpolazione Orizzontale
+            __m128i r0 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(p00, v_wx0), _mm_mullo_epi16(p10, v_wx1)), 8);
+            __m128i r1 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(p01, v_wx0), _mm_mullo_epi16(p11, v_wx1)), 8);
+
+            // Interpolazione Verticale
+            __m128i res = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(r0, v_wy0), _mm_mullo_epi16(r1, v_wy1)), 8);
+
+            // Scrittura veloce
+            __m128i final = _mm_packus_epi16(res, res);
+            int32_t pixel_data = _mm_cvtsi128_si32(final);
+            
+            // Copia dei 3 byte RGB
+            dst_row[x * 3 + 0] = (uint8_t)(pixel_data & 0xFF);
+            dst_row[x * 3 + 1] = (uint8_t)((pixel_data >> 8) & 0xFF);
+            dst_row[x * 3 + 2] = (uint8_t)((pixel_data >> 16) & 0xFF);
         }
     }
 }
-
 /*
 Introduce il concetto di elaborare 4 pixel nel loop principale, ma internamente esegue ancora 4 micro-loop SIMD separati. 
 Il vantaggio qui non è nel calcolo, ma nella preparazione alla "scrittura bulk".
 Q8.8 per i pesi orizzontali e verticali
 */
-
+/*
 void cpu_bil_sse2_v2(
     unsigned char* input,    // Deve essere allocato con aligned_malloc<unsigned char, 16>
     unsigned char* output,   // Deve essere allocato con aligned_malloc<unsigned char, 16>
@@ -498,13 +609,13 @@ void cpu_bil_sse2_v2(
         int gy = y * y_ratio;
         int y0 = gy >> FP_SHIFT;
         int dy = (gy & (FP_ONE - 1)) >> 8;
-        int y1 = (y0 + 1 < height) ? y0 + 1 : y0;
+        int y2 = (y0 + 1 < height) ? y0 + 1 : y0;
 
         unsigned char* r0 = input + y0 * width * channels;
-        unsigned char* r1 = input + y1 * width * channels;
+        unsigned char* r1 = input + y2 * width * channels;
         unsigned char* dst_row = output + y * new_width * channels;
 
-        __m128i v_wy1 = _mm_set1_epi16((short)dy);
+        __m128i v_wy2 = _mm_set1_epi16((short)dy);
         __m128i v_wy0 = _mm_set1_epi16((short)(256 - dy));
         int x = 0;
         // 1. LOOP BATCH (4 pixel alla volta)
@@ -540,7 +651,7 @@ void cpu_bil_sse2_v2(
                 __m128i h1 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(p01_16, v_wx0), _mm_mullo_epi16(p11_16, v_wx1)), 8);
 
                 // Interpolazione verticale
-                __m128i res_16 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy1)), 8);
+                __m128i res_16 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy2)), 8);
 
             // Salvataggio dei 3 byte finali
             // SALVATAGGIO FONDAMENTALE nell'array temporaneo
@@ -574,7 +685,7 @@ void cpu_bil_sse2_v2(
 
             __m128i h0 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(_mm_unpacklo_epi8(p00, zero), v_wx0), _mm_mullo_epi16(_mm_unpacklo_epi8(p10, zero), v_wx1)), 8);
             __m128i h1 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(_mm_unpacklo_epi8(p01, zero), v_wx0), _mm_mullo_epi16(_mm_unpacklo_epi8(p11, zero), v_wx1)), 8);
-            __m128i res_16 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy1)), 8);
+            __m128i res_16 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy2)), 8);
 
             uint32_t pix = (uint32_t)_mm_cvtsi128_si32(_mm_packus_epi16(res_16, res_16));
             dst_row[x * 3]     = pix & 0xFF;
@@ -584,11 +695,12 @@ void cpu_bil_sse2_v2(
     }
 }
 
-/*v3 (Dual-Pixel SIMD): È il vero salto di qualità algoritmico. Impacchetta 2 pixel completi in un unico registro (Tecnica Dual-Pixel).
+/*v3 (Dual-Pixel SIMD): Impacchetta 2 pixel completi in un unico registro (Tecnica Dual-Pixel).
 Satura quasi interamente i 128 bit del registro SSE.
 Dimezza il numero di istruzioni di moltiplicazione (_mm_mullo_epi16) e addizione, perché una singola istruzione opera su due pixel contemporaneamente.
 Q8.8 per i pesi orizzontali e verticali
 */
+/*
 void cpu_bil_sse2_v3(
     unsigned char* input, 
     unsigned char* output,
@@ -619,15 +731,15 @@ void cpu_bil_sse2_v3(
         int gy = y * y_ratio;
         int y0 = gy >> FP_SHIFT;
         int dy = (gy & (FP_ONE - 1)) >> 8;
-        int y1 = (y0 + 1 < height) ? y0 + 1 : y0;
+        int y2 = (y0 + 1 < height) ? y0 + 1 : y0;
 
         unsigned char* r0 = input + y0 * width * 3;
-        unsigned char* r1 = input + y1 * width * 3;
+        unsigned char* r1 = input + y2 * width * 3;
         unsigned char* dst_row = output + y * new_width * 3;
 
-        // Pesi verticali duplicati per 2 pixel: [y0, y0, y0, y0, y1, y1, y1, y1]
+        // Pesi verticali duplicati per 2 pixel: [y0, y0, y0, y0, y2, y2, y2, y2]
         __m128i v_wy0 = _mm_set1_epi16((short)(256 - dy));
-        __m128i v_wy1 = _mm_set1_epi16((short)dy);
+        __m128i v_wy2 = _mm_set1_epi16((short)dy);
 
         int x = 0;
         // Processiamo 4 pixel alla volta, ma a coppie di 2 dentro il SIMD
@@ -663,7 +775,7 @@ void cpu_bil_sse2_v3(
                 // INTERPOLAZIONE (Dual Pixel)
                 __m128i h0 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(row0_left, v_wx0), _mm_mullo_epi16(row0_right, v_wx1)), 8);
                 __m128i h1 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(row1_left, v_wx0), _mm_mullo_epi16(row1_right, v_wx1)), 8);
-                __m128i res = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy1)), 8);
+                __m128i res = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy2)), 8);
                 
                 __m128i res_8 = _mm_packus_epi16(res, res);
                 
@@ -692,7 +804,7 @@ void cpu_bil_sse2_v3(
 
             __m128i h0 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(_mm_unpacklo_epi8(p00, zero), v_wx0), _mm_mullo_epi16(_mm_unpacklo_epi8(p10, zero), v_wx1)), 8);
             __m128i h1 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(_mm_unpacklo_epi8(p01, zero), v_wx0), _mm_mullo_epi16(_mm_unpacklo_epi8(p11, zero), v_wx1)), 8);
-            __m128i res_16 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy1)), 8);
+            __m128i res_16 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy2)), 8);
 
             uint32_t pix = (uint32_t)_mm_cvtsi128_si32(_mm_packus_epi16(res_16, res_16));
             dst_row[x * 3]     = pix & 0xFF;
@@ -743,14 +855,14 @@ void cpu_bil_sse2_v4(
                 int gy = y * y_ratio;
                 int y0_idx = gy >> FP_SHIFT;
                 int dy = (gy & (FP_ONE - 1)) >> 8;
-                int y1_idx = (y0_idx + 1 < height) ? y0_idx + 1 : y0_idx;
+                int y2_idx = (y0_idx + 1 < height) ? y0_idx + 1 : y0_idx;
 
                 unsigned char* r0 = input + y0_idx * width * 3;
-                unsigned char* r1 = input + y1_idx * width * 3;
+                unsigned char* r1 = input + y2_idx * width * 3;
                 unsigned char* dst_row = output + y * new_width * 3;
 
                 __m128i v_wy0 = _mm_set1_epi16((short)(256 - dy));
-                __m128i v_wy1 = _mm_set1_epi16((short)dy);
+                __m128i v_wy2 = _mm_set1_epi16((short)dy);
 
                 int x = tx;
                 // SIMD all'interno del tile
@@ -783,7 +895,7 @@ void cpu_bil_sse2_v4(
 
                         __m128i h0 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(row0_L, v_wx0), _mm_mullo_epi16(row0_R, v_wx1)), 8);
                         __m128i h1 = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(row1_L, v_wx0), _mm_mullo_epi16(row1_R, v_wx1)), 8);
-                        __m128i res = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy1)), 8);
+                        __m128i res = _mm_srli_epi16(_mm_add_epi16(_mm_mullo_epi16(h0, v_wy0), _mm_mullo_epi16(h1, v_wy2)), 8);
                         
                         __m128i res_8 = _mm_packus_epi16(res, res);
                         pixels[batch * 2]     = _mm_cvtsi128_si32(res_8);
@@ -796,18 +908,19 @@ void cpu_bil_sse2_v4(
                     *(uint32_t*)&dst_row[x * 3 + 8] = (uint32_t)((pixels[2] >> 16) & 0xFF) | ((uint32_t)(pixels[3] & 0xFFFFFF) << 8);
                 }
                 // Tail loop per il resto del tile
-                for (; x < x_end; x++) { /* codice scalare... */ }
+                for (; x < x_end; x++) { }
             }
         }
     }
 }
-
+*/
 
 int main() {
     int width, height, channels;
 
     // Carichiamo l'immagine RGB
     unsigned char* image = stbi_load(
+        //"./mario.png",
         "./mario.png",
         &width,
         &height,
@@ -841,16 +954,13 @@ int main() {
     long ref_time_v1;
     long ref_time_v2;
     long ref_time_omp;
-    long ref_time_omp_v3;
-    long ref_time_simd;
+    long ref_time_omp_v2;
     long ref_time_sse2;
     long ref_time_sse2_v2;
-    long ref_time_sse2_v3;
-    long ref_time_sse2_v4;
 
     ref_time_v1 = time_and_print(
         "Bilinear CPU v1",
-        cpu_bic_v1,
+        cpu_bil_v1,
         image, resized,
         width, height,
         new_width, new_height,
@@ -860,7 +970,6 @@ int main() {
         0
     );
     stbi_write_png("resized_cpu_bil_v1.png", new_width, new_height, channels, resized, new_width * channels);
-
 
     ref_time_v2 = time_and_print(
         "Bilinear CPU v2",
@@ -874,7 +983,6 @@ int main() {
         0
     );
     stbi_write_png("resized_cpu_bil_v2.png", new_width, new_height, channels, resized, new_width * channels);
-
     
     int threads = omp_get_max_threads();
     ref_time_omp = time_and_print(
@@ -890,7 +998,7 @@ int main() {
     );
     stbi_write_png("resized_cpu_bil_omp.png", new_width, new_height, channels, resized, new_width * channels);
 
-    ref_time_omp = time_and_print(
+    ref_time_omp_v2 = time_and_print(
         "Bilinear CPU omp_v2",
         cpu_bil_omp_v2,
         image, resized,
@@ -903,19 +1011,6 @@ int main() {
     );
     stbi_write_png("resized_cpu_bil_omp_v2.png", new_width, new_height, channels, resized, new_width * channels);
 
-    ref_time_omp_v3= time_and_print(
-        "Bilinear CPU omp_v3",
-        cpu_bil_omp_v3,
-        image, resized,
-        width, height,
-        new_width, new_height,
-        channels,
-        data_size,
-        ref_time_v1,   
-        threads
-    );
-    stbi_write_png("resized_cpu_bil_omp_v3.png", new_width, new_height, channels, resized, new_width * channels);
-    
     ref_time_sse2 = time_and_print(
         "Bilinear CPU sse2",
         cpu_bil_sse2,
@@ -941,62 +1036,6 @@ int main() {
         0
     );
     stbi_write_png("resized_cpu_bil_sse2_v2.png", new_width, new_height, channels, resized, new_width * channels);
-
-    ref_time_sse2_v3 = time_and_print(
-        "Bilinear CPU sse2_v3",
-        cpu_bil_sse2_v3,
-        image, resized,
-        width, height,
-        new_width, new_height,
-        channels,
-        data_size,
-        ref_time_v1,   
-        0
-    );
-    stbi_write_png("resized_cpu_bil_sse2_v3.png", new_width, new_height, channels, resized, new_width * channels);
-
-    ref_time_sse2_v4 = time_and_print(
-        "Bilinear CPU sse2_v4",
-        cpu_bil_sse2_v4,
-        image, resized,
-        width, height,
-        new_width, new_height,
-        channels,
-        data_size,
-        ref_time_v1,   
-        0
-    );
-    stbi_write_png("resized_cpu_bil_sse2_v4.png", new_width, new_height, channels, resized, new_width * channels);
-/*
-    ref_time_sse2 = time_and_print(
-        "Nearest neighbor CPU sse2",
-        cpu_nn_sse2,
-        image, resized,
-        width, height,
-        new_width, new_height,
-        channels,
-        data_size,
-        ref_time_v1,   
-        0
-    );
-    stbi_write_png("resized_cpu_nn_sse2.png", new_width, new_height, channels, resized, new_width * channels);
-    */
-
-    /*
-    //la toglierò
-    ref_time_sse2_v2 = time_and_print(
-        "Nearest neighbor CPU sse2_2",
-        cpu_nn_sse2_v2,
-        image, resized,
-        width, height,
-        new_width, new_height,
-        channels,
-        data_size,
-        ref_time_v1,   
-        0
-    );
-    stbi_write_png("resized_cpu_nn_sse2_v2.png", new_width, new_height, channels, resized, new_width * channels);
-    */
 
     stbi_image_free(image);
     free(resized);
