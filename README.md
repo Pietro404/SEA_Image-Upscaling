@@ -1,5 +1,6 @@
 # Image Upscaling: Super-Resolution
 Repository Progetto Sistemi di Elaborazione Accelerata (SEA)             CITO, GIROTTI 2025/2026
+
 Vicino Più Prossimo:
 
     Copia il valore del pixel più vicino nella nuova posizione;
