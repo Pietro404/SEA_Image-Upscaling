@@ -1,6 +1,5 @@
 # Image Upscaling: Super-Resolution
-Prima versione del repo di Sistemi di Elaborazione Accelerata (SEA)
-
+Repository Progetto Sistemi di Elaborazione Accelerata (SEA)             CITO, GIROTTI 2025/2026
 Vicino Più Prossimo:
 
     Copia il valore del pixel più vicino nella nuova posizione;
@@ -18,3 +17,4 @@ Bicubica:
     Utilizza una media ponderata di 16 pixel circostanti (4x4);
     Garantisce maggiore uniformità e nitidezza rispetto all'interpolazione bilineare.
     Velocità ridotta: più lenta della bilineare
+<img width="756" height="345" alt="image" src="https://github.com/user-attachments/assets/4f4f1204-93e6-4807-a8b8-ad92d13eefdb" />
