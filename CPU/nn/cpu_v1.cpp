@@ -26,435 +26,329 @@ void cpu_nn_v1(
 
     for (int y = 0; y < new_height; y++) {
         int src_y = (int)(y * y_ratio);
-        if (src_y >= height) src_y = height - 1;
+        //if (src_y >= height) src_y = height - 1;
 
         for (int x = 0; x < new_width; x++) {
             int src_x = (int)(x * x_ratio);
-            if (src_x >= width) src_x = width - 1;
+            //if (src_x >= width) src_x = width - 1;
 
             int in_idx  = (src_y * width + src_x) * channels;
             int out_idx = (y * new_width + x) * channels;
 
-            for (int c = 0; c < channels; c++)
-                output[out_idx + c] = input[in_idx + c];
+            /*1. Questo introduce un overhead di controllo (incremento di c, confronto c < channels, salto condizionato) per ogni singolo pixel il costo è enorme.*/
+            //for (int c = 0; c < channels; c++)
+            //    output[out_idx + c] = input[in_idx + c];
+            output[out_idx + 0] = input[in_idx + 0];
+            output[out_idx + 1] = input[in_idx + 1];
+            output[out_idx + 2] = input[in_idx + 2];
+
         }
     }
 }
-
 void cpu_nn_v2(
     unsigned char* input,
     unsigned char* output,
-    int width,
-    int height,
-    int new_width,
-    int new_height,
+    int width, int height,
+    int new_width, int new_height,
     int channels
 ) {
     // Usiamo il fixed-point a 16 bit (Shift di 16) per non convertire in float
     // Questo permette di calcolare gli indici con semplici operazioni intere
     const int FP_SHIFT = 16;
-    const int FP_ONE = 1 << FP_SHIFT;
 
-    int x_ratio_fp = (int)((width << FP_SHIFT) / new_width);
-    int y_ratio_fp = (int)((height << FP_SHIFT) / new_height);
+    int x_ratio = (width << FP_SHIFT) / new_width;
+    int y_ratio = (height << FP_SHIFT) / new_height;
 
-    // 1. Pre-calcolo degli indici X (Look-up Table locale)
-    // Questo elimina la moltiplicazione float e il cast dal loop interno
-    std::vector<int> x_indices(new_width); //int* x_indices = (int*)malloc(new_width * sizeof(int)); 
+    // 1. LUT per gli indici X: rimuove il calcolo FP dal loop parallelo
+    int* x_indices = (int*)_mm_malloc(new_width * sizeof(int), 16);
     for (int x = 0; x < new_width; x++) {
-        int s_x = (int)(x * x_ratio_fp) >> FP_SHIFT;
-        if (s_x >= width) s_x = width - 1;
-        x_indices[x] = s_x * channels; 
+        x_indices[x] = ((x * x_ratio) >> FP_SHIFT) * channels;
     }
-    
-// 2. Loop principale ottimizzato
-    for (int y = 0; y < new_height; y++) {
-        int src_y = (int)(y * y_ratio_fp) >> FP_SHIFT;
-        if (src_y >= height) src_y = height - 1;
 
-        // putnatori all'inizio della riga concorrente per input e output
-        //CPU usa la cache L1 invece di ram
+    for (int y = 0; y < new_height; y++) {
+        int src_y = (y * y_ratio) >> FP_SHIFT;
+        //if (src_y >= height) src_y = height - 1;
         unsigned char* src_row = &input[src_y * width * channels];
         unsigned char* dst_row = &output[y * new_width * channels];
 
         for (int x = 0; x < new_width; x++) {
-            int src_pix_offset = x_indices[x];
-            int dst_pix_offset = x * channels;
+            int in_x_idx = x_indices[x];
 
-            // Ottimizzazione per canali (RGB)
-            if (channels == 3) {
-                dst_row[dst_pix_offset+0] = src_row[src_pix_offset+ 0];
-                dst_row[dst_pix_offset+1] = src_row[src_pix_offset+ 1];
-                dst_row[dst_pix_offset+2] = src_row[src_pix_offset+ 2];
-            } else {
-                for (int c = 0; c < channels; c++) {
-                    dst_row[dst_pix_offset + c] = src_row[src_pix_offset + c];
-                }
-            }
-        }
-    }
-    //free(x_indices);
-}
-
-
-/*
-void cpu_nn_block(
-    unsigned char* input,
-    unsigned char* output,
-    int width, int height,
-    int new_width, int new_height,
-    int channels
-) {
-    float x_ratio = (float)width / new_width;
-    float y_ratio = (float)height / new_height;
-    int block_size = 64; // blocco di righe
-
-    for (int by = 0; by < new_height; by += block_size) {
-        int y_max = (by + block_size < new_height) ? (by + block_size) : new_height;
-        for (int y = by; y < y_max; y++) {
-            int src_y = (int)(y * y_ratio);
-            if (src_y >= height) src_y = height - 1;
-
-            for (int x = 0; x < new_width; x++) {
-                int src_x = (int)(x * x_ratio);
-                if (src_x >= width) src_x = width - 1;
-
-                int in_idx = (src_y * width + src_x) * channels;
-                int out_idx = (y * new_width + x) * channels;
-
-                for (int c = 0; c < channels; c++)
-                    output[out_idx + c] = input[in_idx + c];
-            }
-        }
-    }
-}
-    */
-
-void cpu_nn_omp(
-    unsigned char* input,
-    unsigned char* output,
-    int width,
-    int height,
-    int new_width,
-    int new_height,
-    int channels
-) {
-    // Usiamo il fixed-point a 16 bit (Shift di 16)
-    // Questo permette di calcolare gli indici con semplici operazioni intere
-    const int FP_SHIFT = 16;
-    const int FP_ONE = 1 << FP_SHIFT;
-
-    int x_ratio_fp = (int)((width << FP_SHIFT) / new_width);
-    int y_ratio_fp = (int)((height << FP_SHIFT) / new_height);
-
-    // 1. Pre-calcolo degli indici X (Look-up Table locale)
-    // Questo elimina la moltiplicazione float e il cast dal loop interno
-    std::vector<int> x_indices(new_width); //int* x_indices = (int*)malloc(new_width * sizeof(int));
-    
-    for (int x = 0; x < new_width; x++) {
-        int s_x = (int)(x * x_ratio_fp) >> FP_SHIFT;
-        if (s_x >= width) s_x = width - 1;
-        x_indices[x] = s_x * channels; 
-    }
-    
-// 2. Loop principale ottimizzato
-#pragma omp parallel for
-    for (int y = 0; y < new_height; y++) {
-        int src_y = (int)(y * y_ratio_fp) >> FP_SHIFT;
-        if (src_y >= height) src_y = height - 1;
-
-        // putnatori all'inizio della riga concorrente per input e output
-        //CPU usa la cache L1 invece di ram
-        unsigned char* src_row = &input[src_y * width * channels];
-        unsigned char* dst_row = &output[y * new_width * channels];
-
-        for (int x = 0; x < new_width; x++) {
-            int src_pix_offset = x_indices[x];
-            int dst_pix_offset = x * channels;
-
-            // Ottimizzazione per canali (RGB)
-            if (channels == 3) {
-                dst_row[dst_pix_offset+0] = src_row[src_pix_offset+ 0];
-                dst_row[dst_pix_offset+1] = src_row[src_pix_offset+ 1];
-                dst_row[dst_pix_offset+2] = src_row[src_pix_offset+ 2];
-            } else {
-                for (int c = 0; c < channels; c++) {
-                    dst_row[dst_pix_offset + c] = src_row[src_pix_offset + c];
-                }
-            }
-        }
-    }
-    //free(x_indices);
-}
-/*
-void cpu_nn_omp(
-    unsigned char* input,
-    unsigned char* output,
-    int width, int height,
-    int new_width, int new_height,
-    int channels
-) {
-    float x_ratio = (float)width / new_width;
-    float y_ratio = (float)height / new_height;
-
-#pragma omp parallel for
-    for (int y = 0; y < new_height; y++) {
-        int src_y = (int)(y * y_ratio);
-        if (src_y >= height) src_y = height - 1;
-
-        for (int x = 0; x < new_width; x++) {
-            int src_x = (int)(x * x_ratio);
-            if (src_x >= width) src_x = width - 1;
-
-            int in_idx  = (src_y * width + src_x) * channels;
-            int out_idx = (y * new_width + x) * channels;
-
-            for (int c = 0; c < channels; c++)
-                output[out_idx + c] = input[in_idx + c];
-        }
-    }
-}
-*/
-
-
-
-#include <emmintrin.h>
-
-/*void cpu_nn_simd(
-    unsigned char* input,
-    unsigned char* output,
-    int width, int height,
-    int new_width, int new_height,
-    int channels
-) {
-    float x_ratio = (float)width / new_width;
-    float y_ratio = (float)height / new_height;
-
-    for (int y = 0; y < new_height; y++) {
-        int src_y = (int)(y * y_ratio);
-        if (src_y >= height) src_y = height - 1;
-
-        for (int x = 0; x < new_width; x++) {
-            int src_x = (int)(x * x_ratio);
-            if (src_x >= width) src_x = width - 1;
-
-            int in_idx  = (src_y * width + src_x) * 3;
-            int out_idx = (y * new_width + x) * 3;
-
-            // carico 16 byte non allineati
-            __m128i pix = _mm_loadu_si128(
-                (__m128i const*)(input + in_idx)
-            );
-
-            // store temporaneo
-            unsigned char tmp[16];
-            _mm_storeu_si128((__m128i*)tmp, pix);
-
-            // copio solo RGB
-            output[out_idx + 0] = tmp[0];
-            output[out_idx + 1] = tmp[1];
-            output[out_idx + 2] = tmp[2];
-        }
-    }
-}
-*/
-
-// Utilizziamo l'allineamento 
-template <typename T, size_t Alignment> 
-T *aligned_malloc(const size_t size) {
-    void *ptr = _mm_malloc(size * sizeof(T), Alignment);
-    if (ptr == nullptr) throw std::bad_alloc();
-    return static_cast<T *>(ptr);
-}
-// Nearest Neighbor presenta accessi regolari e indipendenti, risultando particolarmente adatto alla vettorizzazione SIMD.
-//caso rgba sarebbe molto meglio parallelizzare, noi ci concentriamo su rgb
-void cpu_nn_sse2(
-    unsigned char* input,
-    unsigned char* output,
-    int width,
-    int height,
-    int new_width,
-    int new_height,
-    int channels
-) {
-    // Implementazione SOLO RGB
-    if (channels != 3) return ;
-
-    const int FP_SHIFT = 16;
-    const int alignment = 16;
-
-    int x_ratio_fp = (width  << FP_SHIFT) / new_width;
-    int y_ratio_fp = (height << FP_SHIFT) / new_height;
-
-    // 1. Pre-calcolo indici allineati (LUT)
-    int x = 0;
-    int* x_indices = aligned_malloc<int, alignment>(new_width);
-    for (; x < new_width; x++) {
-        int s_x = (int)((long long)x * x_ratio_fp) >> FP_SHIFT;
-        if (s_x >= width) s_x = width - 1;
-        x_indices[x] = s_x * channels;
-    }
-
-    for (int y = 0; y < new_height; y++) {
-        int src_y = (y * y_ratio_fp) >> FP_SHIFT;
-        if (src_y >= height) src_y = height - 1;
-
-        unsigned char* src_row = &input[src_y * width * channels];
-        unsigned char* dst_row = &output[y * new_width * channels];
-
-        x = 0;
-
-        // SIMD: 4 pixel RGB per iterazione
-        for (; x <= new_width - 4; x += 4) {
-
-            // Carichiamo 4 indici contemporaneamente dalla LUT allineata
-            __m128i v_offsets = _mm_load_si128(reinterpret_cast<const __m128i*>(&x_indices[x]));
-
-            // Estraiamo gli indici (SSE2 non ha gather, quindi l'accesso alla memoria sorgente resta scalare)
-            uint32_t off0 = _mm_cvtsi128_si32(v_offsets);
-            uint32_t off1 = _mm_cvtsi128_si32(_mm_srli_si128(v_offsets, 4));
-            uint32_t off2 = _mm_cvtsi128_si32(_mm_srli_si128(v_offsets, 8));
-            uint32_t off3 = _mm_cvtsi128_si32(_mm_srli_si128(v_offsets, 12));
-
-            // Carichiamo i pixel sorgente (leggiamo 4 byte ma ne useremo 3)
-            uint32_t p0 = *reinterpret_cast<uint32_t*>(&src_row[off0]); // R0 G0 B0 XX
-            uint32_t p1 = *reinterpret_cast<uint32_t*>(&src_row[off1]); // R1 G1 B1 XX
-            uint32_t p2 = *reinterpret_cast<uint32_t*>(&src_row[off2]); // R2 G2 B2 XX    
-            uint32_t p3 = *reinterpret_cast<uint32_t*>(&src_row[off3]); // R3 G3 B3 XX
-
-            // Impacchettamento RGB: creiamo una sequenza contigua di 12 byte
-            // Registro low: [P0_R, P0_G, P0_B, P1_R, P1_G, P1_B, P2_R, P2_G] (8 byte)
-            uint64_t low = (uint64_t)(p0 & 0xFFFFFF) | 
-                           ((uint64_t)(p1 & 0xFFFFFF) << 24) | 
-                           ((uint64_t)(p2 & 0xFFFF) << 48);
-
-            // Registro high: [P2_B, P3_R, P3_G, P3_B] (4 byte)
-            // Prendiamo il terzo byte di p2 (B2) e i 3 byte di p3
-            uint32_t high = (uint32_t)((p2 >> 16) & 0xFF) | 
-                            ((uint32_t)(p3 & 0xFFFFFF) << 8);
-
-            // Scrittura bulk: una da 64-bit e una da 32-bit (molto più veloce di 12 scritture da 8-bit)
-            *reinterpret_cast<uint64_t*>(&dst_row[x * 3]) = low;
-            *reinterpret_cast<uint32_t*>(&dst_row[x * 3 + 8]) = high;
-        }
-
-        // Tail loop per rimasugli
-        for (; x < new_width; x++) {
-            int src_off = x_indices[x];
-            int dst_off = x * 3;
-            dst_row[dst_off]   = src_row[src_off];
-            dst_row[dst_off+1] = src_row[src_off+1];
-            dst_row[dst_off+2] = src_row[src_off+2];
+            //for (int c = 0; c < channels; c++)
+            //    output[out_idx + c] = input[in_idx + c];
+            int out_idx = x * channels;
+            dst_row[out_idx + 0] = src_row[in_x_idx + 0];
+            dst_row[out_idx + 1] = src_row[in_x_idx + 1];
+            dst_row[out_idx + 2] = src_row[in_x_idx + 2];
         }
     }
     _mm_free(x_indices);
 }
 
+void cpu_nn_omp(
+    unsigned char* input,
+    unsigned char* output,
+    int width, int height,
+    int new_width, int new_height,
+    int channels
+) {
+    // Usiamo il fixed-point a 16 bit (Shift di 16) per non convertire in float
+    // Questo permette di calcolare gli indici con semplici operazioni intere
+    const int FP_SHIFT = 16;
+
+    int x_ratio = (width << FP_SHIFT) / new_width;
+    int y_ratio = (height << FP_SHIFT) / new_height;
+
+    // 1. LUT per gli indici X: rimuove il calcolo FP dal loop parallelo
+    int* x_indices = (int*)_mm_malloc(new_width * sizeof(int), 16);
+    for (int x = 0; x < new_width; x++) {
+        x_indices[x] = ((x * x_ratio) >> FP_SHIFT) * channels;
+    }
+    #pragma omp parallel for
+    for (int y = 0; y < new_height; y++) {
+        int src_y = (y * y_ratio) >> FP_SHIFT;
+        //if (src_y >= height) src_y = height - 1;
+        // putnatori all'inizio della riga concorrente per input e output
+        //usa la cache L1 invece di ram
+        unsigned char* src_row = &input[src_y * width * channels];
+        unsigned char* dst_row = &output[y * new_width * channels];
+
+        for (int x = 0; x < new_width; x++) {
+            int in_x_idx = x_indices[x];
+
+            //for (int c = 0; c < channels; c++)
+            //    output[out_idx + c] = input[in_idx + c];
+            int out_idx = x * channels;
+            dst_row[out_idx + 0] = src_row[in_x_idx + 0];
+            dst_row[out_idx + 1] = src_row[in_x_idx + 1];
+            dst_row[out_idx + 2] = src_row[in_x_idx + 2];
+        }
+    }
+    _mm_free(x_indices);
+}
+
+#include <smmintrin.h> // Per _mm_shuffle_epi8. altrimenti con epi32: Ti servirebbero almeno 3-4 istruzioni (shuffle + shift + and + or)
+void cpu_nn_sse2(
+    unsigned char* input,
+    unsigned char* output,
+    int width, int height,
+    int new_width, int new_height,
+    int channels
+) {
+    if (channels != 3) return; // Supporto solo RGB
+
+    const int FP_SHIFT = 16;
+    int x_ratio_fp = (width << FP_SHIFT) / new_width;
+    int y_ratio_fp = (height << FP_SHIFT) / new_height;
+
+    // 1. UTILIZZO DI _mm_store_si128 PER INIZIALIZZARE LA LUT
+    // Allocazione allineata a 16 byte obbligatoria per _mm_store_si128
+    int* x_indices = (int*)_mm_malloc(new_width * sizeof(int), 16);
+    
+    // Possiamo vettorizzare anche la creazione della LUT se volessimo, 
+    for (int x = 0; x < new_width; x++) {
+        x_indices[x] = ((x * x_ratio_fp) >> FP_SHIFT) * 3;
+    }
+
+    // 2. UTILIZZO DI _mm_load_si128 PER CARICARE LA MASCHERA
+    // Definiamo la maschera in memoria allineata a 16 byte
+    alignas(16) const int8_t shuffle_mask_data[16] = {
+        0, 1, 2,      // Pixel 0 (RGB)
+        4, 5, 6,      // Pixel 1 (RGB)
+        8, 9, 10,     // Pixel 2 (RGB)
+        12, 13, 14,   // Pixel 3 (RGB)
+        -1, -1, -1, -1 // Byte vuoti
+    };
+
+    // Carichiamo la maschera in un registro usando l'istruzione richiesta
+    __m128i mask = _mm_load_si128((const __m128i*)shuffle_mask_data);
+
+    for (int y = 0; y < new_height; y++) {
+        // Calcolo riga sorgente
+        int src_y = (y * y_ratio_fp) >> FP_SHIFT;
+        if (src_y >= height) src_y = height - 1;
+
+        unsigned char* src_row = &input[src_y * width * 3];
+        unsigned char* dst_row = &output[y * new_width * 3];
+
+        _mm_prefetch((const char*)src_row, _MM_HINT_T0);
+        _mm_prefetch((const char*)(src_row + 64), _MM_HINT_T0);
+
+        int x = 0;
+        // Elaboriamo 16 pixel alla volta (48 byte di output)
+        // 48 byte si scrivono perfettamente con 3 store da 16 byte (128 bit)
+        for (; x <= new_width - 16; x += 16) {
+            
+            // A. FETCH INDICI (Usiamo _mm_load_si128 sulla LUT)
+            // Carichiamo 4 indici alla volta dalla LUT allineata.
+            // Nota: Anche se li carichiamo in SIMD, dobbiamo estrarli per usarli come indirizzi.
+            __m128i v_idx0 = _mm_load_si128((__m128i*)&x_indices[x]);      // Indici 0-3
+            __m128i v_idx1 = _mm_load_si128((__m128i*)&x_indices[x + 4]);  // Indici 4-7
+            __m128i v_idx2 = _mm_load_si128((__m128i*)&x_indices[x + 8]);  // Indici 8-11
+            __m128i v_idx3 = _mm_load_si128((__m128i*)&x_indices[x + 12]); // Indici 12-15
+
+            // 1. CARICAMENTO PIXEL (4 vettori da 4 pixel l'uno)
+            __m128i v0 = _mm_set_epi32(
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx0, 3)], 
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx0, 2)], 
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx0, 1)], 
+                    *(uint32_t*)&src_row[_mm_cvtsi128_si32(v_idx0)]
+                );
+            __m128i v1 = _mm_set_epi32(
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx1, 3)], 
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx1, 2)], 
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx1, 1)], 
+                    *(uint32_t*)&src_row[_mm_cvtsi128_si32(v_idx1)]
+                );
+            __m128i v2 = _mm_set_epi32(
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx2, 3)], 
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx2, 2)], 
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx2, 1)], 
+                    *(uint32_t*)&src_row[_mm_cvtsi128_si32(v_idx2)]
+                );
+            __m128i v3 = _mm_set_epi32(
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx3, 3)], 
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx3, 2)], 
+                    *(uint32_t*)&src_row[_mm_extract_epi32(v_idx3, 1)], 
+                    *(uint32_t*)&src_row[_mm_cvtsi128_si32(v_idx3)]
+                );
+
+            // 2. PACKING (Shuffle dei byte)
+            v0 = _mm_shuffle_epi8(v0, mask);
+            v1 = _mm_shuffle_epi8(v1, mask);
+            v2 = _mm_shuffle_epi8(v2, mask);
+            v3 = _mm_shuffle_epi8(v3, mask);
+
+            // 3. STORE (Scrittura in memoria)
+            // Prepariamo i 3 registri finali da 128 bit
+            
+            // Blocco 1 (Byte 0-15) tutto v0 (12 byte) + i primi 4 byte di v1
+            __m128i s1 = _mm_or_si128(v0, _mm_bslli_si128(v1, 12));
+            
+            // Blocco 2 (Byte 16-31) v1 (8 byte) + v2 (8 byte)
+            __m128i s2 = _mm_or_si128(_mm_bsrli_si128(v1, 4), _mm_bslli_si128(v2, 8));
+            
+            // Blocco 3 (Byte 32-47) i primi 4 byte di v2 + tutto v3 (12 byte)
+            __m128i s3 = _mm_or_si128(_mm_bsrli_si128(v2, 8), _mm_bslli_si128(v3, 4));
+
+            // 4. SCRITTURA CON _mm_store_si128
+            //if (row_aligned) {
+                // VELOCE: Scrittura allineata diretta (crash se l'indirizzo non è multiplo di 16)
+                _mm_store_si128((__m128i*)(dst_row + x * channels + 0 ), s1);
+                _mm_store_si128((__m128i*)(dst_row + x * channels + 16), s2);
+                _mm_store_si128((__m128i*)(dst_row + x * channels + 32), s3);
+            //} else {
+            //    // SICURO: Scrittura non allineata (leggermente più lenta)
+            //    _mm_storeu_si128((__m128i*)(dst_row + x * 3), s1);
+            //    _mm_storeu_si128((__m128i*)(dst_row + x * 3 + 16), s2);
+            //    _mm_storeu_si128((__m128i*)(dst_row + x * 3 + 32), s3);
+            //}
+        }
+
+        // Tail loop (gestione residui scalari)
+        for (; x < new_width; x++) {
+            int off = x_indices[x]; // Qui leggiamo scalare, inutile caricare un vettore per 1 elemento
+            dst_row[x * 3 + 0] = src_row[off + 0];
+            dst_row[x * 3 + 1] = src_row[off + 1];
+            dst_row[x * 3 + 2] = src_row[off + 2];
+        }
+    }
+    _mm_free(x_indices);
+}
 
 void cpu_nn_sse2_v2(
     unsigned char* input,
     unsigned char* output,
-    int width,
-    int height,
-    int new_width,
-    int new_height,
+    int width, int height,
+    int new_width, int new_height,
     int channels
 ) {
-    if(channels !=3) {
-        //print errore
-        return;
-    }
+    if (channels != 3) return;
+
     const int FP_SHIFT = 16;
-    const int alignment = 16;
+    int x_ratio = (width << FP_SHIFT) / new_width;
+    int y_ratio = (height << FP_SHIFT) / new_height;
 
-    int x_ratio_fp = (int)((width << FP_SHIFT) / new_width);
-    int y_ratio_fp = (int)((height << FP_SHIFT) / new_height);
-
-    // Registri costanti per il calcolo SIMD
-    __m128i v_x_ratio = _mm_set1_epi32(x_ratio_fp);
-    __m128i v_width_m1 = _mm_set1_epi32(width - 1);
-    __m128i v_base_x = _mm_setr_epi32(0, 1, 2, 3); // [0, 1, 2, 3]
-    
-// 2. Loop principale ottimizzato
+    // LUT pre-calcolata (allineata a 16 byte )
+    int* x_indices = (int*)_mm_malloc(new_width * sizeof(int), 16);
+    for (int x = 0; x < new_width; x++) {
+        x_indices[x] = ((x * x_ratio) >> FP_SHIFT) * channels;
+    }
+    // LOOP PRINCIPALE
     for (int y = 0; y < new_height; y++) {
-        int src_y = (int)(y * y_ratio_fp) >> FP_SHIFT;
-        if (src_y >= height) src_y = height - 1;
-
-        // putnatori all'inizio della riga concorrente per input e output
-        //CPU usa la cache L1 invece di ram
+        // Calcolo coordinata Y sorgente
+        int src_y = (y * y_ratio) >> FP_SHIFT;
+        //if (src_y >= height) src_y = height - 1;
+        // Puntatori all'inizio della riga sorgente e destinazione
         unsigned char* src_row = &input[src_y * width * channels];
         unsigned char* dst_row = &output[y * new_width * channels];
 
+        // Prefetch della riga sorgente per minimizzare i cache miss x2 (64 byte per cache line)
+        _mm_prefetch((const char*)src_row, _MM_HINT_T0);
+        _mm_prefetch((const char*)(src_row + 64), _MM_HINT_T0);
+
         int x = 0;
-        // Processiamo 4 pixel RGB alla volta (12 byte)
-        for (; x <= new_width-4; x+=4) {
-            // 1. Generiamo i valori correnti di x: [x, x+1, x+2, x+3]
-            __m128i v_curr_x = _mm_add_epi32(_mm_set1_epi32(x), v_base_x);
+        // LOOP MASTER: 8 Pixel alla volta (24 byte scritti via 3x uint64_t)
+        for (; x <= new_width - 8; x += 8) {
+            // 1. LETTURA INDICI E PREFETCH DATI
+            // Carichiamo gli indici dalla LUT in cache L1
+            const int idx0 = x_indices[x];
+            const int idx1 = x_indices[x+1];
+            const int idx2 = x_indices[x+2];
+            const int idx3 = x_indices[x+3];
+            const int idx4 = x_indices[x+4];
+            const int idx5 = x_indices[x+5];
+            const int idx6 = x_indices[x+6];
+            const int idx7 = x_indices[x+7];
 
-            // 2. Calcolo s_x = (x * x_ratio_fp) >> 16
-            // SSE2 mul_epi32 moltiplica solo i 2 elementi bassi a 64bit, 
-            // Moltiplichiamo separatamente gli elementi pari e dispari.
-            __m128i tmp1 = _mm_mul_epu32(v_curr_x, v_x_ratio); // Moltiplica elem 0 e 2
-            __m128i tmp2 = _mm_mul_epu32(_mm_srli_si128(v_curr_x, 4), _mm_srli_si128(v_x_ratio, 4)); // Elem 1 e 3
-           
-            // Ricomponiamo il risultato spostando i bit per lo shift a 16
-            tmp1 = _mm_srli_epi64(tmp1, FP_SHIFT);
-            tmp2 = _mm_srli_epi64(tmp2, FP_SHIFT);
+            // 2. LETTURA PIXEL (Parallel Load)
+            // Usiamo uint32_t per leggere 4 byte (RGB + 1 byte di scarto)
+            // Il 4° byte è "spazzatura" che elimineremo con le maschere (AND).
+            uint32_t p0 = *(uint32_t*)&src_row[idx0];
+            uint32_t p1 = *(uint32_t*)&src_row[idx1];
+            uint32_t p2 = *(uint32_t*)&src_row[idx2];
+            uint32_t p3 = *(uint32_t*)&src_row[idx3];
+            uint32_t p4 = *(uint32_t*)&src_row[idx4];
+            uint32_t p5 = *(uint32_t*)&src_row[idx5];
+            uint32_t p6 = *(uint32_t*)&src_row[idx6];
+            uint32_t p7 = *(uint32_t*)&src_row[idx7];
 
-           // Shuffle per rimettere i 4 risultati in un unico registro __m128i
-            __m128i v_sx = _mm_unpacklo_epi32(
-                _mm_shuffle_epi32(tmp1, _MM_SHUFFLE(0, 0, 2, 0)),
-                _mm_shuffle_epi32(tmp2, _MM_SHUFFLE(0, 0, 2, 0))
-            );
-            v_sx = _mm_shuffle_epi32(v_sx, _MM_SHUFFLE(3, 1, 2, 0));
+            // PACKING 8 PIXEL in 3x 64-bit (24 Byte totali)
+            // Store 1: P0(rgb), P1(rgb), P2(rg)
+            uint64_t s0 = (uint64_t)(p0 & 0xFFFFFF) | 
+                          ((uint64_t)(p1 & 0xFFFFFF) << 24) | 
+                          ((uint64_t)(p2 & 0xFFFF) << 48);
 
-            // 3. Clamp (v_sx = min(v_sx, width-1))
-            __m128i mask = _mm_cmpgt_epi32(v_sx, v_width_m1);
-            v_sx = _mm_or_si128(_mm_andnot_si128(mask, v_sx), _mm_and_si128(mask, v_width_m1));
+            // Store 2: P2(b), P3(rgb), P4(rgb), P5(r)
+            uint64_t s1 = (uint64_t)((p2 >> 16) & 0xFF) | 
+                          ((uint64_t)(p3 & 0xFFFFFF) << 8) | 
+                          ((uint64_t)(p4 & 0xFFFFFF) << 32) |
+                          ((uint64_t)(p5 & 0xFF) << 56);
 
-            // 4. Offset = s_x * 3 (Facciamo s_x * 2 + s_x )
-            __m128i v_offsets = _mm_add_epi32(_mm_slli_epi32(v_sx, 1), v_sx);
+            // Store 3: P5(gb), P6(rgb), P7(rgb)
+            uint64_t s2 = (uint64_t)((p5 >> 8) & 0xFFFF) | 
+                          ((uint64_t)(p6 & 0xFFFFFF) << 16) | 
+                          ((uint64_t)(p7 & 0xFFFFFF) << 40);
 
-           // 5. Estrazione 
-            uint32_t off0 = _mm_cvtsi128_si32(v_offsets);
-            uint32_t off1 = _mm_cvtsi128_si32(_mm_srli_si128(v_offsets, 4));
-            uint32_t off2 = _mm_cvtsi128_si32(_mm_srli_si128(v_offsets, 8));
-            uint32_t off3 = _mm_cvtsi128_si32(_mm_srli_si128(v_offsets, 12));
-
-            // 6. Scrittura 12 byte (4 pixel RGB)
-            unsigned char* d = dst_row + x * 3;
-
-            d[0]  = src_row[off0];
-            d[1]  = src_row[off0 + 1];
-            d[2]  = src_row[off0 + 2];
-
-            d[3]  = src_row[off1];
-            d[4]  = src_row[off1 + 1];
-            d[5]  = src_row[off1 + 2];
-
-            d[6]  = src_row[off2];
-            d[7]  = src_row[off2 + 1];
-            d[8]  = src_row[off2 + 2];
-
-            d[9]  = src_row[off3];
-            d[10] = src_row[off3 + 1];
-            d[11] = src_row[off3 + 2];
+            // 3. SCRITTURA BULK
+            // Scriviamo i 24 byte (8 pixel) in 3 operazioni da 8 byte ciascuna
+            uint64_t* d = (uint64_t*)&dst_row[x * 3];
+            d[0] = s0;
+            d[1] = s1;
+            d[2] = s2;
         }
 
-            // tail
+        // Tail loop per i rimasugli
+        // Se la larghezza non è multipla di 8, finiamo i pixel rimanenti uno ad uno.
         for (; x < new_width; x++) {
-            int sx = (x * x_ratio_fp) >> FP_SHIFT;
-            if (sx >= width) sx = width - 1;
-
-            unsigned char* s = src_row + sx * 3;
-            unsigned char* d = dst_row + x * 3;
-
-            d[0] = s[0];
-            d[1] = s[1];
-            d[2] = s[2];
+            int off = x_indices[x];
+            dst_row[x * channels]     = src_row[off];
+            dst_row[x * channels + 1] = src_row[off + 1];
+            dst_row[x * channels + 2] = src_row[off + 2];
         }
     }
-    //_mm_free(x_indices);
+    // Liberiamo la memoria della LUT
+    _mm_free(x_indices);
 }
 
 int main() {
@@ -495,12 +389,12 @@ int main() {
     long ref_time_v1;
     long ref_time_v2;
     long ref_time_omp;
-    long ref_time_simd;
     long ref_time_sse2;
     long ref_time_sse2_v2;
+    long ref_time_sse2_v4;
 
     ref_time_v1 = time_and_print(
-        "Nearest neighbor CPU v1",
+        "Nearest neighbor CPU v1\t",
         cpu_nn_v1,
         image, resized,
         width, height,
@@ -514,7 +408,7 @@ int main() {
 
 
     ref_time_v2 = time_and_print(
-        "Nearest neighbor CPU v2",
+        "Nearest neighbor CPU v2\t",
         cpu_nn_v2,
         image, resized,
         width, height,
@@ -528,7 +422,7 @@ int main() {
 
     int threads = omp_get_max_threads();
     ref_time_omp = time_and_print(
-        "Nearest neighbor CPU omp",
+        "Nearest neighbor CPU omp\t",
         cpu_nn_omp,
         image, resized,
         width, height,
@@ -540,23 +434,8 @@ int main() {
     );
     stbi_write_png("resized_cpu_nn_omp.png", new_width, new_height, channels, resized, new_width * channels);
     
-    /*
-    ref_time_simd = time_and_print(
-        "Nearest neighbor CPU simd",
-        cpu_nn_simd,
-        image, resized,
-        width, height,
-        new_width, new_height,
-        channels,
-        data_size,
-        ref_time_v1,   
-        0
-    );
-    stbi_write_png("resized_cpu_nn_simd.png", new_width, new_height, channels, resized, new_width * channels);
-    */
-
     ref_time_sse2 = time_and_print(
-        "Nearest neighbor CPU sse2",
+        "Nearest neighbor CPU sse2\t",
         cpu_nn_sse2,
         image, resized,
         width, height,
@@ -568,10 +447,8 @@ int main() {
     );
     stbi_write_png("resized_cpu_nn_sse2.png", new_width, new_height, channels, resized, new_width * channels);
 
-    /*
-    //la toglierò
     ref_time_sse2_v2 = time_and_print(
-        "Nearest neighbor CPU sse2_2",
+        "Nearest neighbor CPU sse2_2\t",
         cpu_nn_sse2_v2,
         image, resized,
         width, height,
@@ -582,8 +459,7 @@ int main() {
         0
     );
     stbi_write_png("resized_cpu_nn_sse2_v2.png", new_width, new_height, channels, resized, new_width * channels);
-    */
-
+    
     stbi_image_free(image);
     free(resized);
 
