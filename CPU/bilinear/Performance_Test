@@ -1,0 +1,10 @@
+g++ cpu_v1.cpp test.cpp -O0 -fopenmp -msse4 -o cpu_v1
+.\cpu_v1
+
+ -> Bilinear CPU v1              time: 1033.88 ms        | Througput: 0.043 GB/s         | Bandwidth: 0.214 GB/s
+ -> Bilinear CPU v2              time:  437.52 ms        | Througput: 0.101 GB/s         | Bandwidth: 0.506 GB/s         | Speedup:  2.36x
+ -> Bilinear CPU omp             time:   60.84 ms        | Througput: 0.727 GB/s         | Bandwidth: 3.636 GB/s         | Speedup: 16.99x | comp_units: 16 Eff: 1.06
+ -> Bilinear CPU omp_v2          time:   57.34 ms        | Througput: 0.771 GB/s         | Bandwidth: 3.857 GB/s         | Speedup: 18.03x | comp_units: 16 Eff: 1.13
+ -> Bilinear CPU sse2            time:  529.66 ms        | Througput: 0.084 GB/s         | Bandwidth: 0.418 GB/s         | Speedup:  1.95x
+ -> Bilinear CPU sse2_v2         time: 1847.15 ms        | Througput: 0.024 GB/s         | Bandwidth: 0.120 GB/s         | Speedup:  0.56x
+Upscaling RGB completato!
