@@ -1,1 +1,10 @@
+g++ cpu_v1.cpp test.cpp -O0 -fopenmp -msse4 -o cpu_v1
+.\cpu_v1
 
+ -> Bicubic CPU v1               time: 36713.18 ms       | Througput: 0.001 GB/s         | Bandwidth: 0.020 GB/s
+ -> Bicubic CPU v2               time: 2395.33 ms        | Througput: 0.018 GB/s         | Bandwidth: 0.314 GB/s         | Speedup: 15.33x
+ -> Bicubic CPU v3               time: 1954.69 ms        | Througput: 0.023 GB/s         | Bandwidth: 0.385 GB/s         | Speedup: 18.78x
+ -> Bicubic CPU omp              time:  190.53 ms        | Througput: 0.232 GB/s         | Bandwidth: 3.947 GB/s         | Speedup: 192.69x | comp_units: 16 Eff: 12.04
+ -> Bicubic CPU sse2             time: 8611.89 ms        | Througput: 0.005 GB/s         | Bandwidth: 0.087 GB/s         | Speedup:  4.26x
+ -> Bicubic CPU sse2 v2          time: 4641.14 ms        | Througput: 0.010 GB/s         | Bandwidth: 0.162 GB/s         | Speedup:  7.91x
+Upscaling RGB completato!
