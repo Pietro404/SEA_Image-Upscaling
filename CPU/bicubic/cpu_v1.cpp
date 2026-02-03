@@ -41,114 +41,45 @@ void cpu_bic_v1(
     for (int y = 0; y < new_height; y++) {
         for (int x = 0; x < new_width; x++) {
             // Mappa le coordinate del nuovo pixel nell'immagine originale
-            float px = (x + 0.5f) * x_ratio - 0.5f;
-            float py = (y + 0.5f) * y_ratio - 0.5f;
+            float gx = x * x_ratio;
+            float gy = y * y_ratio;
 
-            int ix = (int)std::floor(px);
-            int iy = (int)std::floor(py);
+            int ix = (int)gx;
+            int iy = (int)gy;
 
-            // Per ogni canale (R, G, B, etc.)
+            float dx = gx - ix;
+            float dy = gy - iy;
+
+            // Per ogni canale (R, G, B,)
             for (int c = 0; c < channels; c++) {
-                float pixel_value = 0.0f;
-                float weight_sum = 0.0f;
+                float value = 0.0f;
 
                 // Loop sull'intorno 4x4
                 for (int m = -1; m <= 2; m++) {
+                    int yy = std::min(std::max(iy + m, 0), height - 1);
+                    float wy = cubic_hermite(m - dy);
+
                     for (int n = -1; n <= 2; n++) {
+                        int xx = std::min(std::max(ix + n, 0), width - 1);
+                        float wx = cubic_hermite(n - dx);
+
                         int src_x = std::clamp(ix + n, 0, width - 1);
                         int src_y = std::clamp(iy + m, 0, height - 1);
 
-                        float dist_x = px - (ix + n);
-                        float dist_y = py - (iy + m);
-
-                        float weight = cubic_hermite(dist_x) * cubic_hermite(dist_y);
-
-                        int index = (src_y * width + src_x) * channels + c;
-                        pixel_value += input[index] * weight;
-                        weight_sum += weight;
+                        float pixel = input[(yy * width + xx) * channels + c];
+                        value += pixel * wx * wy;
                     }
                 }
-
                 // Normalizza e scrivi il risultato
                 int out_index = (y * new_width + x) * channels + c;
-                output[out_index] = (unsigned char)std::clamp(pixel_value / weight_sum, 0.0f, 255.0f);
+                output[out_index] = (unsigned char)std::clamp(value, 0.0f, 255.0f);
             }
         }
     }
 }
-
-#include <cmath>
-#include <algorithm>
-#include <omp.h>
-
-// Bicubica ottimizzata per OpenMP 
-void cpu_bic_v2(
-    unsigned char* input, unsigned char* output,
-    int width, int height,
-    int new_width, int new_height,
-    int channels
-) {
-    
-
-    float x_ratio = (float)width / new_width;
-    float y_ratio = (float)height / new_height;
-
-    // Dimensione del blocco (Tile size). 16-32 è ottimo per L1/L2
-    const int TILE_SIZE = 16; 
-
-    for (int ty = 0; ty < new_height; ty += TILE_SIZE) {
-        for (int tx = 0; tx < new_width; tx += TILE_SIZE) {
-            
-            // Processa il blocco (Tile)
-            for (int y = ty; y < std::min(ty + TILE_SIZE, new_height); ++y) {
-                float py = (y + 0.5f) * y_ratio - 0.5f;
-                int iy = (int)std::floor(py);
-                float dy = py - iy;
-
-                // Precalcolo pesi verticali per la riga del blocco
-                float wy[4];
-                for (int i = 0; i < 4; i++) wy[i] = cubic_hermite(dy - (i - 1));
-
-                for (int x = tx; x < std::min(tx + TILE_SIZE, new_width); ++x) {
-                    float px = (x + 0.5f) * x_ratio - 0.5f;
-                    int ix = (int)std::floor(px);
-                    float dx = px - ix;
-
-                    float wx[4];
-                    for (int i = 0; i < 4; i++) wx[i] = cubic_hermite(dx - (i - 1));
-
-                    for (int c = 0; c < channels; c++) {
-                        float pixel_value = 0.0f;
-                        float weight_sum = 0.0f;
-
-                        for (int m = 0; m < 4; m++) {
-                            int src_y = std::clamp(iy + m - 1, 0, height - 1);
-                            float w_y = wy[m];
-                            int row_offset = src_y * width * channels;
-
-                            for (int n = 0; n < 4; n++) {
-                                int src_x = std::clamp(ix + n - 1, 0, width - 1);
-                                float weight = w_y * wx[n];
-
-                                pixel_value += input[row_offset + (src_x * channels) + c] * weight;
-                                weight_sum += weight;
-                            }
-                        }
-                        
-                        int out_idx = (y * new_width + x) * channels + c;
-                        output[out_idx] = (unsigned char)std::clamp(pixel_value / weight_sum, 0.0f, 255.0f);
-                    }
-                }
-            }
-        }
-    }
-}
-
 
 // Bicubica ottimizzata per OpenMP e fixed-point + tiling + RGB contiguo + padding 2x2
-
-
-void cpu_bic_v3( // Bicubica con tiling e rbg contiguo
+void cpu_bic_v2( // Bicubica con tiling e rbg contiguo
     unsigned char* input, unsigned char* output,
     int width, int height,
     int new_width, int new_height,
@@ -181,16 +112,16 @@ void cpu_bic_v3( // Bicubica con tiling e rbg contiguo
     float y_ratio = (float)height / new_height;
 
     for (int x = 0; x < new_width; x++) {
-        float px = (x + 0.5f) * x_ratio - 0.5f;
-        ix_arr[x] = (int)std::floor(px);
+        float px = x  * x_ratio ;
+        ix_arr[x] = px;
         float dx = px - ix_arr[x];
         for (int i = 0; i < 4; i++) 
             wx_arr[x * 4 + i] = cubic_hermite(dx - (i - 1));
     }
 
     for (int y = 0; y < new_height; y++) {
-        float py = (y + 0.5f) * y_ratio - 0.5f;
-        int iy = (int)std::floor(py);
+        float py = y  * y_ratio;
+        int iy = py;
         float dy = py - iy;
         float wy[4];
         for (int i = 0; i < 4; i++) wy[i] = cubic_hermite(dy - (i - 1));
@@ -205,7 +136,7 @@ void cpu_bic_v3( // Bicubica con tiling e rbg contiguo
             int px_offset = (ix_arr[x] + 1) * channels; // ix + pad - 1
             float* current_wx = &wx_arr[x * 4];
             
-            float vr = 0.5f, vg = 0.5f, vb = 0.5f;
+            float vr = 0.0f, vg = 0.0f, vb = 0.0f;
 
             for (int m = 0; m < 4; m++) {
             float w_y = wy[m];
@@ -227,7 +158,7 @@ void cpu_bic_v3( // Bicubica con tiling e rbg contiguo
             int out_idx = (y * new_width + x) * channels;
 
             // Branchless Clamp: Convertiamo a int e usiamo operatori ternari
-            // che i compilatori moderni traducono in istruzioni CMOV o MIN/MAX
+            // che il compilatore traduce in istruzioni CMOV o MIN/MAX
             int ir = (int)vr;
             int ig = (int)vg;
             int ib = (int)vb;
@@ -242,7 +173,7 @@ void cpu_bic_v3( // Bicubica con tiling e rbg contiguo
 // LUT a 15 bit per massima precisione senza float
 static int BIC_LUT_INT_V4[512 * 4];
 
-void precompute_lut_int_v4() {
+void precompute_lut_int_v3() {
     for (int i = 0; i < 512; i++) {
         float d = i / 256.0f;
         int sum = 0;
@@ -259,12 +190,13 @@ void precompute_lut_int_v4() {
         BIC_LUT_INT_V4[i * 4 + 1] += (32768 - sum); 
     }
 }
+
 // Fixed Point + LUT + No-Clamp
-void cpu_bic_v4(unsigned char* input, unsigned char* output, 
+void cpu_bic_v3(unsigned char* input, unsigned char* output, 
                            int width, int height, int new_width, int new_height, int channels) {
     
     static bool init = false;
-    if (!init) { precompute_lut_int_v4(); init = true; }
+    if (!init) { precompute_lut_int_v3(); init = true; }
 
     // 1. PADDING (Indispensabile per eliminare i clamp interni)
     int pad = 2;
@@ -273,11 +205,14 @@ void cpu_bic_v4(unsigned char* input, unsigned char* output,
     std::vector<unsigned char> padded_input(p_w * p_h * 3);
     
     for (int y = 0; y < p_h; ++y) {
-        int sy = std::max(0, std::min(height - 1, y - pad));
+        int sy = ((y-pad<0)?0:(y-pad>height-1)?height-1:y-pad); //std::max(0, std::min(height - 1, y - pad));
         for (int x = 0; x < p_w; ++x) {
-            int sx = std::max(0, std::min(width - 1, x - pad));
-            for(int c=0; c<3; ++c)
-                padded_input[(y * p_w + x) * 3 + c] = input[(sy * width + sx) * 3 + c];
+            int sx = ((x-pad<0)?0:(x-pad>width-1)?width-1:x-pad);  //std::max(0, std::min(width - 1, x - pad));
+
+            padded_input[(y * p_w + x) * channels + 0] = input[(sy * width + sx) * channels + 0];
+            padded_input[(y * p_w + x) * channels + 1] = input[(sy * width + sx) * channels + 1];
+            padded_input[(y * p_w + x) * channels + 2] = input[(sy * width + sx) * channels + 2];
+
         }
     }
 
@@ -320,76 +255,9 @@ void cpu_bic_v4(unsigned char* input, unsigned char* output,
 
             // Normalizzazione finale da Q30 a 8-bit (circa >> 23 se abbiamo shiftato prima)
             // Usiamo uno shift bilanciato per restare nei 32 bit
-            d_row[x * 3 + 0] = (unsigned char)std::clamp(r >> 23, 0, 255);
-            d_row[x * 3 + 1] = (unsigned char)std::clamp(g >> 23, 0, 255);
-            d_row[x * 3 + 2] = (unsigned char)std::clamp(b >> 23, 0, 255);
-        }
-    }
-}
-
-
-void cpu_bic_omp(unsigned char* input, unsigned char* output, 
-                       int width, int height, int new_width, int new_height, int channels) {
-    
-    float x_ratio = (float)width / new_width;
-    float y_ratio = (float)height / new_height;
-    const int TILE_SIZE = 16;
-
-    // Pre-calcolo pesi orizzontali (opzionale ma consigliato per velocità)
-    std::vector<int> ix_arr(new_width);
-    std::vector<float> wx_arr(new_width * 4);
-    for (int x = 0; x < new_width; x++) {
-        float px = (x + 0.5f) * x_ratio - 0.5f;
-        ix_arr[x] = (int)std::floor(px);
-        float dx = px - ix_arr[x];
-        for (int i = 0; i < 4; i++) wx_arr[x * 4 + i] = cubic_hermite(dx - (i - 1));
-    }
-
-    // Parallelizziamo sui blocchi (Tiles)
-    //collapse(2), OpenMP distribuisce i "quadratini" dell'immagine a tutti i core in modo bilanciato.
-    #pragma omp parallel for collapse(2) schedule(guided)
-    for (int ty = 0; ty < new_height; ty += TILE_SIZE) {
-        for (int tx = 0; tx < new_width; tx += TILE_SIZE) {
-            
-            // Buffer locale al thread per il tile (evita di bloccare la memoria globale)
-            // Dimensione: un tile 16x16 ha bisogno di un intorno sorgente circa proporzionale
-            // Per semplicità qui usiamo l'input diretto, ma il Tiling vero servirebbe per la cache L1.
-
-            for (int y = ty; y < std::min(ty + TILE_SIZE, new_height); y++) {
-                float py = (y + 0.5f) * y_ratio - 0.5f;
-                int iy = (int)std::floor(py);
-                float dy = py - iy;
-                float wy[4];
-                for (int i = 0; i < 4; i++) wy[i] = cubic_hermite(dy - (i - 1));
-
-                for (int x = tx; x < std::min(tx + TILE_SIZE, new_width); x++) {
-                    int ix = ix_arr[x];
-                    float* c_wx = &wx_arr[x * 4];
-                    float r = 0, g = 0, b = 0;
-
-                    for (int m = 0; m < 4; m++) {
-                        // Clamp verticale on-the-fly invece del padding totale
-                        int sy = std::max(0, std::min(height - 1, iy + m - 1));
-                        const unsigned char* row_ptr = &input[sy * width * channels];
-                        
-                        for (int n = 0; n < 4; n++) {
-                            // Clamp orizzontale on-the-fly
-                            int sx = std::max(0, std::min(width - 1, ix + n - 1));
-                            float w = wy[m] * c_wx[n];
-                            const unsigned char* pixel = row_ptr + (sx * channels);
-                            
-                            r += pixel[0] * w;
-                            g += pixel[1] * w;
-                            b += pixel[2] * w;
-                        }
-                    }
-
-                    int out_idx = (y * new_width + x) * channels;
-                    output[out_idx]   = (unsigned char)std::max(0.0f, std::min(255.0f, r));
-                    output[out_idx+1] = (unsigned char)std::max(0.0f, std::min(255.0f, g));
-                    output[out_idx+2] = (unsigned char)std::max(0.0f, std::min(255.0f, b));
-                }
-            }
+            d_row[x * 3 + 0] = (unsigned char)(((r>>23)<0)?0:((r>>23)>255)?255:(r>>23));//std::clamp(r >> 23, 0, 255);
+            d_row[x * 3 + 1] = (unsigned char)(((g>>23)<0)?0:((g>>23)>255)?255:(g>>23)); //std::clamp(g >> 23, 0, 255);
+            d_row[x * 3 + 2] = (unsigned char)(((b>>23)<0)?0:((b>>23)>255)?255:(b>>23));//std::clamp(b >> 23, 0, 255);
         }
     }
 }
@@ -420,7 +288,7 @@ void precompute_lut_int() {
     }
 }
 // Fixed Point + LUT + No-Clamp
-void cpu_bic_omp_v2(unsigned char* input, unsigned char* output, 
+void cpu_bic_omp(unsigned char* input, unsigned char* output, 
                            int width, int height, int new_width, int new_height, int channels) {
     
     static bool init = false;
@@ -483,9 +351,9 @@ void cpu_bic_omp_v2(unsigned char* input, unsigned char* output,
 
             // Normalizzazione finale da Q30 a 8-bit (circa >> 23 se abbiamo shiftato prima)
             // Usiamo uno shift bilanciato per restare nei 32 bit
-            d_row[x * 3 + 0] = (unsigned char)std::clamp(r >> 23, 0, 255);
-            d_row[x * 3 + 1] = (unsigned char)std::clamp(g >> 23, 0, 255);
-            d_row[x * 3 + 2] = (unsigned char)std::clamp(b >> 23, 0, 255);
+            d_row[x * 3 + 0] = (unsigned char)(((r>>23)<0)?0:((r>>23)>255)?255:(r>>23));//std::clamp(r >> 23, 0, 255);
+            d_row[x * 3 + 1] = (unsigned char)(((g>>23)<0)?0:((g>>23)>255)?255:(g>>23)); //std::clamp(g >> 23, 0, 255);
+            d_row[x * 3 + 2] = (unsigned char)(((b>>23)<0)?0:((b>>23)>255)?255:(b>>23));//std::clamp(b >> 23, 0, 255);
         }
     }
 }
@@ -499,7 +367,6 @@ void cpu_bic_omp_v2(unsigned char* input, unsigned char* output,
 
 // --- LUT Q7 (x128) ---
 // Usiamo Q7 (128) invece di Q6 (64) per eliminare l'effetto griglia, 
-// ma non Q8 (256) per evitare l'immagine rossa (overflow).
 static short BIC_LUT_SSE[512 * 4]; 
 
 void precompute_bicubic_lut_sse() {
@@ -520,7 +387,6 @@ void precompute_bicubic_lut_sse() {
             sum += weights[k + 1];
         }
 
-        // CORREZIONE SOMMA: Forza la somma a 128 per evitare variazioni di luminosità
         // Distribuiamo l'errore sul peso maggiore (di solito quello centrale k=0 o k=1)
         int error = 128 - sum;
         if (error != 0) {
@@ -528,7 +394,6 @@ void precompute_bicubic_lut_sse() {
             if (d < 0.5f) weights[1] += error; 
             else weights[2] += error;
         }
-
         for (int k = 0; k < 4; k++) BIC_LUT_SSE[i * 4 + k] = (short)weights[k];
     }
 }
@@ -548,14 +413,10 @@ inline __m128i load_pixel_rgb_sse(const T* row, int idx, int safe_limit) {
 void cpu_bic_sse2(unsigned char* input, unsigned char* output,
                         int width, int height, int new_width, int new_height, int channels) {
     
-    // Assicurati che la LUT sia calcolata!
     precompute_bicubic_lut_sse();
-    
 
     const int FP_SHIFT = 16;
-    
-    // FIX DIMENSIONE: Usiamo 'width' pieno, non 'width - 1'.
-    // Questo corregge lo zoom indesiderato.
+
     int x_ratio = ((long long)width << FP_SHIFT) / new_width;
     int y_ratio = ((long long)height << FP_SHIFT) / new_height;
 
@@ -564,7 +425,7 @@ void cpu_bic_sse2(unsigned char* input, unsigned char* output,
 
     for (int x = 0; x < new_width; x++) {
         // Aggiungiamo mezza unità per centrare il campionamento (standard grafico)
-        int gx = x * x_ratio; // Opzionale: + (x_ratio >> 1) per centraggio perfetto
+        int gx = x * x_ratio; 
         ix_arr[x] = gx >> FP_SHIFT;
         // Mappiamo 0..65535 su 0..255 per la LUT (offset 8 bit)
         wx_ptr[x] = &BIC_LUT_SSE[((gx & 0xFFFF) >> 8) * 4];
@@ -618,17 +479,11 @@ void cpu_bic_sse2(unsigned char* input, unsigned char* output,
                 __m128i sum01 = _mm_madd_epi16(_mm_unpacklo_epi16(_mm_unpacklo_epi8(p0, zero), _mm_unpacklo_epi8(p1, zero)), v_wx01);
                 __m128i sum23 = _mm_madd_epi16(_mm_unpacklo_epi16(_mm_unpacklo_epi8(p2, zero), _mm_unpacklo_epi8(p3, zero)), v_wx23);
                 
-                // Q7 Output. Max approx 32640.
-                // Pack saturebbe se superasse 32767. 
-                // TRUCCO ANTI-ROSSO: Shiftiamo di 1 a destra (diviso 2) per stare sicuri nel range signed 16-bit
-                // Il risultato diventa Q6 (64) effettivo.
                 __m128i row_total = _mm_srai_epi32(_mm_add_epi32(sum01, sum23), 1); 
                 h_res[k] = _mm_packs_epi32(row_total, zero); 
             }
 
             // VERTICALE
-            // Input: Q6 (per via dello shift sopra). Peso: Q7.
-            // Totale: Q13 (8192).
             __m128i v_final = _mm_add_epi32(
                 _mm_madd_epi16(_mm_unpacklo_epi16(h_res[0], h_res[1]), v_wy01),
                 _mm_madd_epi16(_mm_unpacklo_epi16(h_res[2], h_res[3]), v_wy23)
@@ -654,7 +509,7 @@ void cpu_bic_sse2_v2(unsigned char* input, unsigned char* output,
   // Assicurati che la LUT sia calcolata!
     precompute_bicubic_lut_sse();
 
-    // 1. PADDING PIÙ AMPIO PER SICUREZZA SIMD
+    // 1. PADDING PIÙ AMPIO PER SICUREZZA
     // Aggiungiamo 4 pixel di bordo invece di 2 per evitare che l'ultimo caricamento 
     // SIMD (che legge 4 byte alla volta) vada fuori buffer.
     int pad = 4;
@@ -743,6 +598,131 @@ void cpu_bic_sse2_v2(unsigned char* input, unsigned char* output,
         }
     }
 }
+/*
+void cpu_bic_sse2_v3(
+    unsigned char* input,
+    unsigned char* output,
+    int width, int height,
+    int new_width, int new_height,
+    int channels
+) {
+    if (channels != 3) return;
+
+    const int FP_SHIFT = 15;
+    const int FP_HALF  = 1 << (FP_SHIFT - 1);
+
+    for (int y = 0; y < new_height; y++) {
+        int sy = y_src[y];              // LUT Y
+        __m128i wy0 = _mm_set1_epi16(wy[y][0]);
+        __m128i wy1 = _mm_set1_epi16(wy[y][1]);
+        __m128i wy2 = _mm_set1_epi16(wy[y][2]);
+        __m128i wy3 = _mm_set1_epi16(wy[y][3]);
+
+        unsigned char* dst = &output[y * new_width * 3];
+
+        int x = 0;
+        for (; x <= new_width - 4; x += 4) {
+
+            // Accumulatori RGB (32 bit)
+            __m128i acc_r = _mm_setzero_si128();
+            __m128i acc_g = _mm_setzero_si128();
+            __m128i acc_b = _mm_setzero_si128();
+
+            for (int ky = 0; ky < 4; ky++) {
+                unsigned char* src =
+                    &input[(sy + ky) * width * 3];
+
+                __m128i wyv =
+                    (ky == 0) ? wy0 :
+                    (ky == 1) ? wy1 :
+                    (ky == 2) ? wy2 : wy3;
+
+                // ---- Interpolazione orizzontale ----
+                __m128i r = _mm_setzero_si128();
+                __m128i g = _mm_setzero_si128();
+                __m128i b = _mm_setzero_si128();
+
+                for (int kx = 0; kx < 4; kx++) {
+                    int idx0 = x_idx[x + 0] + kx * 3;
+                    int idx1 = x_idx[x + 1] + kx * 3;
+                    int idx2 = x_idx[x + 2] + kx * 3;
+                    int idx3 = x_idx[x + 3] + kx * 3;
+
+                    __m128i wxv = _mm_set1_epi16(wx[x][kx]);
+
+                    __m128i vr = _mm_set_epi16(
+                        src[idx3], src[idx2],
+                        src[idx1], src[idx0],
+                        0, 0, 0, 0
+                    );
+                    __m128i vg = _mm_set_epi16(
+                        src[idx3 + 1], src[idx2 + 1],
+                        src[idx1 + 1], src[idx0 + 1],
+                        0, 0, 0, 0
+                    );
+                    __m128i vb = _mm_set_epi16(
+                        src[idx3 + 2], src[idx2 + 2],
+                        src[idx1 + 2], src[idx0 + 2],
+                        0, 0, 0, 0
+                    );
+
+                    r = _mm_add_epi32(
+                        r, _mm_madd_epi16(vr, wxv));
+                    g = _mm_add_epi32(
+                        g, _mm_madd_epi16(vg, wxv));
+                    b = _mm_add_epi32(
+                        b, _mm_madd_epi16(vb, wxv));
+                }
+
+                // ---- Interpolazione verticale ----
+                acc_r = _mm_add_epi32(acc_r,
+                    _mm_mullo_epi32(r, wyv));
+                acc_g = _mm_add_epi32(acc_g,
+                    _mm_mullo_epi32(g, wyv));
+                acc_b = _mm_add_epi32(acc_b,
+                    _mm_mullo_epi32(b, wyv));
+            }
+
+            // ---- Normalizzazione ----
+            acc_r = _mm_add_epi32(acc_r, _mm_set1_epi32(FP_HALF));
+            acc_g = _mm_add_epi32(acc_g, _mm_set1_epi32(FP_HALF));
+            acc_b = _mm_add_epi32(acc_b, _mm_set1_epi32(FP_HALF));
+
+            acc_r = _mm_srai_epi32(acc_r, 2 * FP_SHIFT);
+            acc_g = _mm_srai_epi32(acc_g, 2 * FP_SHIFT);
+            acc_b = _mm_srai_epi32(acc_b, 2 * FP_SHIFT);
+
+            // ---- Store RGB interleaved ----
+            int r0 = _mm_extract_epi16(acc_r, 0);
+            int r1 = _mm_extract_epi16(acc_r, 2);
+            int r2 = _mm_extract_epi16(acc_r, 4);
+            int r3 = _mm_extract_epi16(acc_r, 6);
+
+            int g0 = _mm_extract_epi16(acc_g, 0);
+            int g1 = _mm_extract_epi16(acc_g, 2);
+            int g2 = _mm_extract_epi16(acc_g, 4);
+            int g3 = _mm_extract_epi16(acc_g, 6);
+
+            int b0 = _mm_extract_epi16(acc_b, 0);
+            int b1 = _mm_extract_epi16(acc_b, 2);
+            int b2 = _mm_extract_epi16(acc_b, 4);
+            int b3 = _mm_extract_epi16(acc_b, 6);
+
+            dst[0]  = r0; dst[1]  = g0; dst[2]  = b0;
+            dst[3]  = r1; dst[4]  = g1; dst[5]  = b1;
+            dst[6]  = r2; dst[7]  = g2; dst[8]  = b2;
+            dst[9]  = r3; dst[10] = g3; dst[11] = b3;
+
+            dst += 12;
+        }
+
+        // tail loop scalare
+        for (; x < new_width; x++) {
+            // fallback bicubico scalare
+        }
+    }
+}
+*/
 
 int main() {
     int width, height, channels;
@@ -782,15 +762,9 @@ int main() {
     long ref_time_v1;
     long ref_time_v2;
     long ref_time_v3;
-    long ref_time_v4;
     long ref_time_omp;
-    long ref_time_omp_v2;
-    long ref_time_omp_v3;
-    long ref_time_simd;
     long ref_time_sse2;
     long ref_time_sse2_v2;
-    long ref_time_sse2_v3;
-
 
     ref_time_v1 = time_and_print(
         "Bicubic CPU v1",
@@ -832,19 +806,6 @@ int main() {
     );
     stbi_write_png("resized_cpu_bic_v3.png", new_width, new_height, channels, resized, new_width * channels);
 
-    ref_time_v4= time_and_print(
-        "Bicubic CPU v4",
-        cpu_bic_v4,
-        image, resized,
-        width, height,
-        new_width, new_height,
-        channels,
-        data_size,
-        ref_time_v1,   
-        0
-    );
-    stbi_write_png("resized_cpu_bic_v4.png", new_width, new_height, channels, resized, new_width * channels);
-
     int threads = omp_get_max_threads();
     ref_time_omp = time_and_print(
         "Bicubic CPU omp",
@@ -858,19 +819,6 @@ int main() {
         threads
     );
     stbi_write_png("resized_cpu_bic_omp.png", new_width, new_height, channels, resized, new_width * channels);
-
-    ref_time_omp_v2 = time_and_print(
-        "Bicubic CPU omp v2",
-        cpu_bic_omp_v2,
-        image, resized,
-        width, height,
-        new_width, new_height,
-        channels,
-        data_size,
-        ref_time_v1,  
-        threads
-    );
-    stbi_write_png("resized_cpu_bic_omp_v2.png", new_width, new_height, channels, resized, new_width * channels);
 
     ref_time_sse2 = time_and_print(
         "Bicubic CPU sse2",
