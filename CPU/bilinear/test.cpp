@@ -54,8 +54,8 @@ long time_and_print(
     // 4. Stampa formattata
     printf(" -> %-22s ", name);
     printf("\t time: %7.2f ms", time_us / 1000.0); // Mostriamo ms con decimali
-    printf("\t | Througput: %5.2f GB/s", throughput_gbs);
-    printf("\t | Bandwidth: %5.2f GB/s", bandwidth_gbs);
+    printf("\t | Througput: %5.3f GB/s", throughput_gbs);
+    printf("\t | Bandwidth: %5.3f GB/s", bandwidth_gbs);
 
     if (ref_time > 0) {
         double speedup = (double)ref_time / (double)time_us;
