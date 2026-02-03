@@ -1,0 +1,121 @@
+==11898== NVPROF is profiling process 11898, command: ./main_v2 mario_hd.png 4 1
+Nome Dispositivo: Tesla T4
+Memoria Gloable Totale: 15095 MB
+Clock Core: 1590 MHz
+Compute Capability: 7.5
+
+Image loaded: 1280x720 with 3 channels
+kernel <<<(320,180), (16,16)>>> Time elapsed 0.002435 sec
+CUDA error: no error
+
+Upscaling CUDA di mario_hd.png completato
+==11898== Profiling application: ./main_v2 mario_hd.png 4 1
+==11898== Profiling result:
+            Type  Time(%)      Time     Calls       Avg       Min       Max  Name
+ GPU activities:   91.32%  27.783ms         1  27.783ms  27.783ms  27.783ms  [CUDA memcpy DtoH]
+                    7.22%  2.1960ms         1  2.1960ms  2.1960ms  2.1960ms  bilinear_kernel_shared(unsigned char*, unsigned char*, int, int, int, int, int)
+                    1.46%  443.20us         1  443.20us  443.20us  443.20us  [CUDA memcpy HtoD]
+      API calls:   74.39%  177.29ms         2  88.644ms  110.86us  177.18ms  cudaMalloc
+                   12.27%  29.236ms         2  14.618ms  632.08us  28.604ms  cudaMemcpy
+                   12.05%  28.717ms         1  28.717ms  28.717ms  28.717ms  cudaDeviceReset
+                    0.92%  2.1991ms         1  2.1991ms  2.1991ms  2.1991ms  cudaDeviceSynchronize
+                    0.14%  342.03us         2  171.01us  109.14us  232.88us  cudaFree
+                    0.10%  230.70us         1  230.70us  230.70us  230.70us  cudaLaunchKernel
+                    0.07%  168.65us       114  1.4790us     107ns  68.355us  cuDeviceGetAttribute
+                    0.05%  129.33us         1  129.33us  129.33us  129.33us  cudaGetDeviceProperties
+                    0.01%  13.379us         1  13.379us  13.379us  13.379us  cuDeviceGetName
+                    0.00%  5.6930us         1  5.6930us  5.6930us  5.6930us  cuDeviceGetPCIBusId
+                    0.00%  1.6780us         3     559ns     137ns  1.1910us  cuDeviceGetCount
+                    0.00%     926ns         1     926ns     926ns     926ns  cudaGetLastError
+                    0.00%     867ns         2     433ns     157ns     710ns  cuDeviceGet
+                    0.00%     529ns         1     529ns     529ns     529ns  cuDeviceTotalMem
+                    0.00%     422ns         1     422ns     422ns     422ns  cudaGetErrorString
+                    0.00%     350ns         1     350ns     350ns     350ns  cuModuleGetLoadingMode
+                    0.00%     254ns         1     254ns     254ns     254ns  cuDeviceGetUuid
+
+
+
+
+
+==PROF== Connected to process 12001 (/content/main_v2)
+Nome Dispositivo: Tesla T4
+Memoria Gloable Totale: 15095 MB
+Clock Core: 1590 MHz
+Compute Capability: 7.5
+
+Image loaded: 1280x720 with 3 channels
+==PROF== Profiling "bilinear_kernel_shared" - 0: 0%....50%....100% - 9 passes
+kernel <<<(320,180), (16,16)>>> Time elapsed 0.321238 sec
+CUDA error: no error
+
+Upscaling CUDA di mario_hd.png completato
+==PROF== Disconnected from process 12001
+[12001] main_v2@127.0.0.1
+  bilinear_kernel_shared(unsigned char *, unsigned char *, int, int, int, int, int) (320, 180, 1)x(16, 16, 1), Context 1, Stream 7, Device 0, CC 7.5
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ------------
+    Metric Name             Metric Unit Metric Value
+    ----------------------- ----------- ------------
+    DRAM Frequency                  Ghz         4.99
+    SM Frequency                    Mhz       585.01
+    Elapsed Cycles                cycle    1,263,583
+    Memory Throughput                 %        74.78
+    DRAM Throughput                   %        20.14
+    Duration                         ms         2.16
+    L1/TEX Cache Throughput           %        88.95
+    L2 Cache Throughput               %        19.80
+    SM Active Cycles              cycle 1,259,924.18
+    Compute (SM) Throughput           %        74.78
+    ----------------------- ----------- ------------
+
+    INF   Compute and Memory are well-balanced: To reduce runtime, both computation and memory traffic must be reduced. 
+          Check both the Compute Workload Analysis and Memory Workload Analysis sections.                               
+
+    Section: Launch Statistics
+    -------------------------------- --------------- ---------------
+    Metric Name                          Metric Unit    Metric Value
+    -------------------------------- --------------- ---------------
+    Block Size                                                   256
+    Function Cache Configuration                     CachePreferNone
+    Grid Size                                                 57,600
+    Registers Per Thread             register/thread              42
+    Shared Memory Configuration Size           Kbyte           32.77
+    Driver Shared Memory Per Block        byte/block               0
+    Dynamic Shared Memory Per Block       byte/block               0
+    Static Shared Memory Per Block       Kbyte/block            3.07
+    # SMs                                         SM              40
+    Threads                                   thread      14,745,600
+    Uses Green Context                                             0
+    Waves Per SM                                                 360
+    -------------------------------- --------------- ---------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Block Limit SM                        block           16
+    Block Limit Registers                 block            5
+    Block Limit Shared Mem                block           10
+    Block Limit Warps                     block            4
+    Theoretical Active Warps per SM        warp           32
+    Theoretical Occupancy                     %          100
+    Achieved Occupancy                        %        92.88
+    Achieved Active Warps Per SM           warp        29.72
+    ------------------------------- ----------- ------------
+
+    Section: GPU and Memory Workload Distribution
+    -------------------------- ----------- ------------
+    Metric Name                Metric Unit Metric Value
+    -------------------------- ----------- ------------
+    Average DRAM Active Cycles       cycle    2,169,435
+    Total DRAM Elapsed Cycles        cycle   86,167,552
+    Average L1 Active Cycles         cycle 1,259,924.18
+    Total L1 Elapsed Cycles          cycle   50,525,888
+    Average L2 Active Cycles         cycle 1,663,183.03
+    Total L2 Elapsed Cycles          cycle   59,095,872
+    Average SM Active Cycles         cycle 1,259,924.18
+    Total SM Elapsed Cycles          cycle   50,525,888
+    Average SMSP Active Cycles       cycle 1,259,943.82
+    Total SMSP Elapsed Cycles        cycle  202,103,552
+    -------------------------- ----------- ------------
+
