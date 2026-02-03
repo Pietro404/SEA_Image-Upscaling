@@ -1,0 +1,130 @@
+==2465== NVPROF is profiling process 2465, command: ./main mario_hd.png 4 0
+Nome Dispositivo: Tesla T4
+Memoria Gloable Totale: 15095 MB
+Clock Core: 1590 MHz
+Compute Capability: 7.5
+
+Image loaded: 1280x720 with 3 channels
+kernel <<<(320,180), (16,16)>>> Time elapsed 0.001209 sec
+CUDA error: no error
+
+Upscaling CUDA di mario_hd.png completato
+==2465== Profiling application: ./main mario_hd.png 4 0
+==2465== Profiling result:
+            Type  Time(%)      Time     Calls       Avg       Min       Max  Name
+ GPU activities:   95.22%  27.990ms         1  27.990ms  27.990ms  27.990ms  [CUDA memcpy DtoH]
+                    3.26%  958.23us         1  958.23us  958.23us  958.23us  nn_kernel(unsigned char*, unsigned char*, int, int, int, int, int)
+                    1.52%  446.33us         1  446.33us  446.33us  446.33us  [CUDA memcpy HtoD]
+      API calls:   76.26%  200.13ms         2  100.06ms  92.926us  200.03ms  cudaMalloc
+                   11.58%  30.388ms         2  15.194ms  1.5686ms  28.819ms  cudaMemcpy
+                   11.22%  29.441ms         1  29.441ms  29.441ms  29.441ms  cudaDeviceReset
+                    0.37%  960.67us         1  960.67us  960.67us  960.67us  cudaDeviceSynchronize
+                    0.23%  604.80us         1  604.80us  604.80us  604.80us  cuDeviceGetPCIBusId
+                    0.13%  338.44us         2  169.22us  110.55us  227.89us  cudaFree
+                    0.09%  244.19us         1  244.19us  244.19us  244.19us  cudaLaunchKernel
+                    0.06%  155.90us       114  1.3670us     105ns  60.699us  cuDeviceGetAttribute
+                    0.05%  138.30us         1  138.30us  138.30us  138.30us  cudaGetDeviceProperties
+                    0.00%  12.413us         1  12.413us  12.413us  12.413us  cuDeviceGetName
+                    0.00%  1.9950us         3     665ns     134ns  1.5310us  cuDeviceGetCount
+                    0.00%  1.0610us         2     530ns     225ns     836ns  cuDeviceGet
+                    0.00%     562ns         1     562ns     562ns     562ns  cuDeviceTotalMem
+                    0.00%     452ns         1     452ns     452ns     452ns  cudaGetLastError
+                    0.00%     400ns         1     400ns     400ns     400ns  cuModuleGetLoadingMode
+                    0.00%     349ns         1     349ns     349ns     349ns  cudaGetErrorString
+                    0.00%     312ns         1     312ns     312ns     312ns  cuDeviceGetUuid
+
+
+
+
+
+==PROF== Connected to process 5010 (/content/main)
+Nome Dispositivo: Tesla T4
+Memoria Gloable Totale: 15095 MB
+Clock Core: 1590 MHz
+Compute Capability: 7.5
+
+Image loaded: 1280x720 with 3 channels
+==PROF== Profiling "nn_kernel" - 0: 0%....50%....100% - 9 passes
+kernel <<<(320,180), (16,16)>>> Time elapsed 0.566925 sec
+CUDA error: no error
+
+Upscaling CUDA di mario_hd.png completato
+==PROF== Disconnected from process 5010
+[5010] main@127.0.0.1
+  nn_kernel(unsigned char *, unsigned char *, int, int, int, int, int) (320, 180, 1)x(16, 16, 1), Context 1, Stream 7, Device 0, CC 7.5
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ------------
+    Metric Name             Metric Unit Metric Value
+    ----------------------- ----------- ------------
+    DRAM Frequency                  Ghz         4.98
+    SM Frequency                    Mhz       584.99
+    Elapsed Cycles                cycle      528,838
+    Memory Throughput                 %        43.50
+    DRAM Throughput                   %        42.78
+    Duration                         us          904
+    L1/TEX Cache Throughput           %        86.99
+    L2 Cache Throughput               %        37.26
+    SM Active Cycles              cycle   527,015.68
+    Compute (SM) Throughput           %        54.98
+    ----------------------- ----------- ------------
+
+    OPT   This kernel exhibits low compute throughput and memory bandwidth utilization relative to the peak performance 
+          of this device. Achieved compute throughput and/or memory bandwidth below 60.0% of peak typically indicate    
+          latency issues. Look at Scheduler Statistics and Warp State Statistics for potential reasons.                 
+
+    Section: Launch Statistics
+    -------------------------------- --------------- ---------------
+    Metric Name                          Metric Unit    Metric Value
+    -------------------------------- --------------- ---------------
+    Block Size                                                   256
+    Function Cache Configuration                     CachePreferNone
+    Grid Size                                                 57,600
+    Registers Per Thread             register/thread              24
+    Shared Memory Configuration Size           Kbyte           32.77
+    Driver Shared Memory Per Block        byte/block               0
+    Dynamic Shared Memory Per Block       byte/block               0
+    Static Shared Memory Per Block        byte/block               0
+    # SMs                                         SM              40
+    Threads                                   thread      14,745,600
+    Uses Green Context                                             0
+    Waves Per SM                                                 360
+    -------------------------------- --------------- ---------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Block Limit SM                        block           16
+    Block Limit Registers                 block           10
+    Block Limit Shared Mem                block           16
+    Block Limit Warps                     block            4
+    Theoretical Active Warps per SM        warp           32
+    Theoretical Occupancy                     %          100
+    Achieved Occupancy                        %        84.03
+    Achieved Active Warps Per SM           warp        26.89
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Local Speedup: 15.97%                                                                                    
+          The difference between calculated theoretical (100.0%) and measured achieved occupancy (84.0%) can be the     
+          result of warp scheduling overheads or workload imbalances during the kernel execution. Load imbalances can   
+          occur between warps within a block as well as across blocks of the same kernel. See the CUDA Best Practices   
+          Guide (https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#occupancy) for more details on     
+          optimizing occupancy.                                                                                         
+
+    Section: GPU and Memory Workload Distribution
+    -------------------------- ----------- ------------
+    Metric Name                Metric Unit Metric Value
+    -------------------------- ----------- ------------
+    Average DRAM Active Cycles       cycle    1,926,406
+    Total DRAM Elapsed Cycles        cycle   36,020,224
+    Average L1 Active Cycles         cycle   527,015.68
+    Total L1 Elapsed Cycles          cycle   21,164,872
+    Average L2 Active Cycles         cycle   675,113.03
+    Total L2 Elapsed Cycles          cycle   24,732,640
+    Average SM Active Cycles         cycle   527,015.68
+    Total SM Elapsed Cycles          cycle   21,164,872
+    Average SMSP Active Cycles       cycle   526,446.71
+    Total SMSP Elapsed Cycles        cycle   84,659,488
+    -------------------------- ----------- ------------
+
+
