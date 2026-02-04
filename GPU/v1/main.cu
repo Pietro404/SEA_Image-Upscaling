@@ -5,7 +5,7 @@
 #include <string.h>
 
 // Include STB image libraries
-//rimuove warnings
+// Rimuove warnings
 #pragma nv_diag_suppress 550
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -23,15 +23,15 @@
         exit(1); \
     } \
 }
-//Funzione timer CPU: misura il tempo wall-clock visto dalla CPU
-//Imprecisa, genera overhead, deprecata
+// Funzione timer CPU: misura il tempo wall-clock visto dalla CPU
+// Imprecisa, genera overhead, deprecata, solo a scopo didattico
 double cpuSecond() {
       struct timespec ts;
       timespec_get(&ts, TIME_UTC);
       return ((double)ts.tv_sec + (double)ts.tv_nsec * 1.e-9);
     }
 
-//NN
+// Nearest Neighbor
 __global__ void nn_kernel(
     unsigned char *input,
     unsigned char *output,
@@ -39,31 +39,26 @@ __global__ void nn_kernel(
     int new_width, int new_height,
     int channels
 ) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    // Coordinate globali del pixel di output
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-	// Controllo dei bordi: assicura che il thread sia dentro l'immagine 
+	// Controllo dei bordi: assicura che il thread sia dentro l'immagine
     if (x >= new_width || y >= new_height) return;
 	
-	//TODO: eseguire test solo int eliminando da qui
+	// Rapporto di scala
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
 	
     int src_x = (int)(x * x_ratio);
     int src_y = (int)(y * y_ratio);
-	//a qui
 
-	/*e mantenere solo questo
-	int src_x = (x * width) / new_width;
-    int src_y = (y * height) / new_height;
-	*/
-
-    //vedere se tenere
+    // vedere se tenere
     if (src_x >= width)  src_x = width - 1;
     if (src_y >= height) src_y = height - 1;
 	
-	//Calcola l'indice di base: baseIndex = (i * width + j) * 3
-	//Accesso ai canali: R=baseI, G=baseI+1, B=baseI+2
+	// Calcola l'indice di base: baseIndex = (i * width + j) * 3
+	// Accesso ai canali: R=baseI, G=baseI+1, B=baseI+2
     for (int c = 0; c < channels; c++) {
         output[(y * new_width + x) * channels + c] =
             input[(src_y * width + src_x) * channels + c];
@@ -79,14 +74,14 @@ __global__ void nn_kernel(
     */
 }
 
-//Bilineare
+// Bilineare
 __global__ void bilinear_kernel(
     unsigned char *input,
     unsigned char *output,
     int width, int height,
     int new_width, int new_height,
     int channels
-	//float x_ratio, float y_ratio
+	//float x_ratio, float y_ratio per test se passati da CPU
 ) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -94,11 +89,10 @@ __global__ void bilinear_kernel(
 	// Controllo dei bordi: assicura che il thread sia dentro l'immagine 
     if (x >= new_width || y >= new_height) return;
 
-	//TODO: PROVARE a passare valore fix da CPU!
-	//Eliminare x/y_ratio qua e aggiungere lato host
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
-
+	
+	// Coordinate float nello spazio input
     float gx = x * x_ratio;
     float gy = y * y_ratio;
 
@@ -111,21 +105,21 @@ __global__ void bilinear_kernel(
     float dy = gy - y0;
 
     for (int c = 0; c < channels; c++) {
+		// Lettura dei 4 vicini
         float p00 = input[(y0 * width + x0) * channels + c];
         float p10 = input[(y0 * width + x1) * channels + c];
         float p01 = input[(y1 * width + x0) * channels + c];
         float p11 = input[(y1 * width + x1) * channels + c];
 
-        float value =
-            p00 * (1 - dx) * (1 - dy) +
-            p10 * dx * (1 - dy) +
-            p01 * (1 - dx) * dy +
-            p11 * dx * dy;
-
+        float value = p00 * (1 - dx) * (1 - dy) +
+                      p10 * dx * (1 - dy) +
+                      p01 * (1 - dx) * dy +
+                      p11 * dx * dy;
+					  
         output[(y * new_width + x) * channels + c] = (unsigned char)value;
     }
 }
-
+// funzione "utility" per la bicubica
 __device__ float cubic(float x) {
     const float a = -0.5f;
     x = fabsf(x);
@@ -138,7 +132,7 @@ __device__ float cubic(float x) {
         return 0.0f;
 }
 
-//Bicubica
+// Bicubica
 __global__ void bicubic_kernel(
     unsigned char *input,
     unsigned char *output,
@@ -151,7 +145,8 @@ __global__ void bicubic_kernel(
 
 	// Controllo dei bordi: assicura che il thread sia dentro l'immagine 
     if (x >= new_width || y >= new_height) return;
-
+    
+	// Rapporto di scala
     float x_ratio = (float)width / new_width;
     float y_ratio = (float)height / new_height;
 
@@ -179,13 +174,14 @@ __global__ void bicubic_kernel(
                 value += pixel * wx * wy;
             }
         }
-
+		// Necessario limitare (clamp) il valore del pixel calcolato dall’interpolazione bicubica 
+		// entro l’intervallo valido (media ponderata di 16px può essere negativa o >255)
         value = fminf(fmaxf(value, 0.0f), 255.0f);
         output[(y * new_width + x) * channels + c] = (unsigned char)value;
     }
 }
 
-//funzione host
+// Funzione host
 void resize_cuda(
     unsigned char *h_input,
     unsigned char *h_output,
@@ -194,17 +190,17 @@ void resize_cuda(
     int channels,
     int mode // 0=NN, 1=Bilineare, 2=Bicubica
 ) {
-    // Allocate device memory
+    // Alloca device memory
     unsigned char *d_input, *d_output;
     int in_size  = width * height * channels;
     int out_size = new_width * new_height * channels;
     
-    //controllo allocazione IO
+    // Controllo allocazione IO
     CHECK(cudaMalloc(&d_input, in_size));
     CHECK(cudaMalloc(&d_output, out_size));
     CHECK(cudaMemcpy(d_input, h_input, in_size, cudaMemcpyHostToDevice));
     
-    //2D Set up grid and block dimensions 16X16=256t
+    // 2D Imposta grid e block 16X16=256t
     dim3 block(16, 16);
     dim3 grid((new_width + block.x - 1) / block.x,
               (new_height + block.y - 1) / block.y);
@@ -212,7 +208,8 @@ void resize_cuda(
 	// Registra il tempo di inizio
 	double iStart = cpuSecond();	
 	
-    //Configurazione di esecuzione: nGrid blocco, nBlock thread. Avvia nBlock istanze parallele del kernel sulla GPU
+    // Configurazione di esecuzione: nGrid blocco, nBlock thread.
+	// Avvia nBlock istanze parallele del kernel sulla GPU
     if (mode == 0)
         nn_kernel<<<grid, block>>>(d_input, d_output, width, height, new_width, new_height, channels);
     else if (mode == 1)
@@ -224,9 +221,7 @@ void resize_cuda(
 	
 	// Calcola il tempo trascorso
 	double iElaps = cpuSecond() - iStart; 
-    //risolve warning dim3 type 
   	printf("kernel <<<(%d,%d), (%d,%d)>>> Time elapsed %f sec\n", grid.x, grid.y, block.x, block.y, iElaps);	
-	
 	CHECK(cudaMemcpy(h_output, d_output, out_size, cudaMemcpyDeviceToHost));
 
     CHECK(cudaFree(d_input));
@@ -234,7 +229,7 @@ void resize_cuda(
     printf("CUDA error: %s\n", cudaGetErrorString(cudaGetLastError()));
 }
 
-//esegue su CPU
+// Esegue su CPU (Host)
 int main(int argc, char** argv) {
     if (argc < 4) {
         printf("Usage: %s input.png scale algorithm(0 = nearest|1 = bilinear|2 = bicubic)\n", argv[0]);
@@ -242,7 +237,7 @@ int main(int argc, char** argv) {
     }
     int width, height, channels;
 
-    //---chk--->Prop. del dispositivo
+    // Prop. del dispositivo
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0); 
     printf("Nome Dispositivo: %s\n", prop.name);
@@ -251,11 +246,11 @@ int main(int argc, char** argv) {
     printf("Compute Capability: %d.%d\n\n", prop.major, prop.minor);
     //---
     
-    //filename and format
+    // NomeFile.formato
     const char *imgName = argv[1];
-    //upscaling factor
+    // Upscaling factor (moltiplicatore)
     int mul = atoi(argv[2]);
-    //interpolation type: 0 = NN, 1 = bilinear, 2 = bicubic
+    // Tipo di interpolazione: 0 = NN, 1 = bilinear, 2 = bicubic
     int interpolation = atoi(argv[3]);
 
     const char *mode;
@@ -266,7 +261,7 @@ int main(int argc, char** argv) {
     else
         mode = "BC";
 
-    //load image
+    // Carica immagine
     unsigned char *image = stbi_load(imgName, &width, &height, &channels, 3);
     if (!image) {
         printf("Error loading image %s\n", imgName);
@@ -274,39 +269,31 @@ int main(int argc, char** argv) {
     }
     printf("Image loaded: %dx%d with %d channels\n", width, height, channels);
 
-	//RGB
+	// RGB
     channels = 3;
     int new_width = width * mul;
     int new_height = height * mul;
 
     unsigned char *resized = (unsigned char*) malloc(new_width * new_height * channels); 
     
-	//calls device
-	//provare a passare float x_ratio, float y_ratio direttamente da qua
+	//test float x_ratio, float y_ratio direttamente da qua
 	//float x_ratio = (float)(width - 1) / new_width;
     //float y_ratio = (float)(height - 1) / new_height;
 	//riscrivere resize_cuda con param()
+	
+	// Richiama il device
     resize_cuda(image, resized, width, height, new_width, new_height, channels, interpolation);
     
-    // Save the output image
+    // Salva immagine output
     char outputName[256];
     snprintf(outputName, sizeof(outputName), "upscaled_x%d_%s_%s", mul, mode, imgName);
     stbi_write_png(outputName, new_width, new_height, channels, resized, new_width * channels);
     printf("\nUpscaling CUDA di %s completato\n", imgName);
     
-    // Clean up
+    // Pulizia
     stbi_image_free(image);
     free(resized);
     CHECK(cudaDeviceReset());
 
     return 0;
 }
-
-
-
-
-
-
-
-
-
