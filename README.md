@@ -4,6 +4,7 @@ Repository Progetto Sistemi di Elaborazione Accelerata (SEA)             CITO, G
 Obiettivo del progetto: analizzare e confrontare diverse tecniche di image upscaling (super-resolution classica), valutandone qualità visiva e prestazioni computazionali.
 
 In particolare, vengono studiati e implementati tre metodi di interpolazione fra i classici ovvero: Vicino Più Prossimo (Nearest Neighbor), Bilineare e Bicubica.
+
 Ogni implementazione presenta compromessi diversi tra velocità di esecuzione, uniformità dell’immagine e livello di dettaglio.
 
 Vicino Più Prossimo:
