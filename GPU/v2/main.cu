@@ -52,7 +52,7 @@ __device__ T clamp(T value, T low, T high) {
     return (value < low) ? low : ((value > high) ? high : value);
 }
 
-// Nearest Neighbor
+// Nearest Neighbor (Shared)
 __global__ void nn_kernel_shared(
     unsigned char *input, unsigned char *output,
     int width, int height,
@@ -143,7 +143,7 @@ __global__ void nn_kernel_shared(
     }
 }
 
-// Bilineare
+// Bilineare (Shared)
 __global__ void bilinear_kernel_shared(
     unsigned char *input, unsigned char *output,
     int width, int height,
@@ -262,7 +262,7 @@ __device__ float cubic(float x) {
         return 0.0f;
 }
 
-// Bicubica
+// Bicubica (Shared)
 __global__ void bicubic_kernel_shared(
     unsigned char *input,
     unsigned char *output,
@@ -509,4 +509,5 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
 
