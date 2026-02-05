@@ -72,7 +72,7 @@ void cpu_bil_v2(
     int y_ratio = ((height) << FP_SHIFT) / new_height ;
 
     // LUT X per evitare ricalcoli inutili nel loop interno
-    int* lut = (int*)_mm_malloc(new_width * 3 * sizeof(int), 16);
+    int* lut = (int*)malloc(new_width * 3 * sizeof(int));
     int* x0 = lut; //std::vector<int> x0(new_width);
     int* x1 = lut + new_width; //std::vector<int> x1(new_width);
     int* dx = lut + (new_width * 2); //std::vector<int> dx(new_width); 
@@ -137,7 +137,7 @@ void cpu_bil_v2(
                 dst[o + 2] = (unsigned char)(acc >> 32); //troncamento
         }
     }
-    _mm_free(lut);
+    free(lut);
 }
 
 void cpu_bil_omp(
@@ -155,7 +155,7 @@ void cpu_bil_omp(
     int y_ratio = ((height) << FP_SHIFT) / new_height ;
 
     // LUT X per evitare ricalcoli inutili nel loop interno
-    int* lut = (int*)_mm_malloc(new_width * 3 * sizeof(int), 16);
+    int* lut = (int*)malloc(new_width * 3 * sizeof(int));
     int* x0 = lut; //std::vector<int> x0(new_width);
     int* x1 = lut + new_width; //std::vector<int> x1(new_width);
     int* dx = lut + (new_width * 2); //std::vector<int> dx(new_width); 
@@ -217,7 +217,7 @@ void cpu_bil_omp(
             dst[o + 2] = (unsigned char)(acc >> 32); //troncamento
         }
     }
-    _mm_free(lut);
+    free(lut);
 }
 
 // Bilinear RGB con OpenMP e ottimizzazioni fixed-point e LUT  Q8.8 (SIMD auto)
@@ -235,7 +235,7 @@ void cpu_bil_omp_v2(
     int x_ratio = ((width ) << 16) / (new_width );
     int y_ratio = ((height ) << 16) / (new_height);
     
-    int* lut = (int*)_mm_malloc(new_width * 3 * sizeof(int), 16);
+    int* lut = (int*)malloc(new_width * 3 * sizeof(int));
     int* x0 = lut; //std::vector<int> x0(new_width);
     int* x1 = lut + new_width; //std::vector<int> x1(new_width);
     int* dx = lut + (new_width * 2); //std::vector<int> dx(new_width); 
@@ -290,7 +290,7 @@ void cpu_bil_omp_v2(
             dst[o + 2] = (unsigned char)((h0_2 * wy0 + h1_2 * wy2) >> 8);
         }
     }
-    _mm_free(lut);
+    free(lut);
 }
 
 #include <emmintrin.h>
@@ -1043,3 +1043,4 @@ int main() {
     printf("Upscaling RGB completato!\n");
     return 0;
 }
+
