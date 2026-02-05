@@ -60,7 +60,7 @@ void cpu_nn_v2(
     int y_ratio = (height << FP_SHIFT) / new_height;
 
     // 1. LUT per gli indici X: rimuove il calcolo FP dal loop parallelo
-    int* x_indices = (int*)_mm_malloc(new_width * sizeof(int), 16);
+    int* x_indices = (int*)malloc(new_width * sizeof(int));
     for (int x = 0; x < new_width; x++) {
         x_indices[x] = ((x * x_ratio) >> FP_SHIFT) * channels;
     }
@@ -82,7 +82,7 @@ void cpu_nn_v2(
             dst_row[out_idx + 2] = src_row[in_x_idx + 2];
         }
     }
-    _mm_free(x_indices);
+    free(x_indices);
 }
 
 void cpu_nn_omp(
@@ -100,7 +100,7 @@ void cpu_nn_omp(
     int y_ratio = (height << FP_SHIFT) / new_height;
 
     // 1. LUT per gli indici X: rimuove il calcolo FP dal loop parallelo
-    int* x_indices = (int*)_mm_malloc(new_width * sizeof(int), 16);
+    int* x_indices = (int*)malloc(new_width * sizeof(int));
     for (int x = 0; x < new_width; x++) {
         x_indices[x] = ((x * x_ratio) >> FP_SHIFT) * channels;
     }
@@ -124,7 +124,7 @@ void cpu_nn_omp(
             dst_row[out_idx + 2] = src_row[in_x_idx + 2];
         }
     }
-    _mm_free(x_indices);
+    free(x_indices);
 }
 
 #include <smmintrin.h> // Per _mm_shuffle_epi8. altrimenti con epi32: Ti servirebbero almeno 3-4 istruzioni (shuffle + shift + and + or)
@@ -466,3 +466,4 @@ int main() {
     printf("Upscaling RGB completato!\n");
     return 0;
 }
+
